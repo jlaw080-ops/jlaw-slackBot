@@ -6,6 +6,8 @@
  *  /할일 완료|시작|검토|보류 키워드               status 변경 (done / in-progress / review / backlog)
  *  /할일 브리핑
  *  /작업일지 메모  ·  /작업일지 생성               일일노트 마커 블록
+ *  /작업일지 노트 제목 | 프로젝트 | 서브 + 줄바꿈 본문   01_Projects/…/01_진행업무/MMDD_제목/MMDD_제목.md
+ *  /할일 보내기 [할일|작업일지] [전체|오늘|주간]   볼트 할일을 그 채널로 게시
  *  /일정 오늘|내일|주간  ·  /일정 추가 제목 | 날짜 | 시작 | 종료
  *  /티켓 발급 키워드                              노트에 notion: pending 표시 (발급은 notion-qa-ticket 스킬)
  *  /티켓 상태                                     연결된 티켓의 Notion 상태 확인
@@ -18,7 +20,8 @@ import {
   appendMemo, createTask, findTasksByKeyword, guessProject, listOpenTasks, PROJECTS, setStatus, STATUS_KO,
   type Priority, type VaultStatus, type VaultTask,
 } from "./vault.js";
-import { candidateCard, context, header, projectPicker, section, taskCard, taskLine } from "./slack.js";
+import { candidateCard, context, header, postMessage, projectPicker, section, taskCard, taskLine } from "./slack.js";
+import { resolveWorkDir, writeWorklogNote } from "./notes.js";
 import { runDailyBrief, eventLine } from "./brief.js";
 import { runWorklog } from "./worklog.js";
 import { findAssignedCandidates, markPending, refreshTicketStatus } from "./notion-sync.js";
@@ -26,14 +29,18 @@ import { findAssignedCandidates, markPending, refreshTicketStatus } from "./noti
 export interface CommandContext { userId: string; channelId: string; permalink?: string }
 export interface CommandReply { text: string; blocks?: unknown[]; inChannel?: boolean }
 
+export type ListScope = "기본" | "전체" | "오늘" | "주간";
+
 export type AddSpec = { title: string; due: string | null; priority?: Priority; project?: string; rawDue?: string; rawProject?: string };
 
 export type Parsed =
   | ({ kind: "todo.add" } & AddSpec)
-  | { kind: "todo.list"; scope: "기본" | "전체" | "오늘" | "주간" }
+  | { kind: "todo.list"; scope: ListScope }
   | { kind: "todo.status"; keyword: string; status: VaultStatus }
   | { kind: "todo.brief" }
   | { kind: "worklog.note"; text: string }
+  | { kind: "worklog.vaultnote"; title: string; content: string; project?: string; sub?: string }
+  | { kind: "todo.push"; target: "할일" | "작업일지"; scope: ListScope }
   | { kind: "worklog.generate" }
   | { kind: "schedule.list"; days: number; from: string }
   | { kind: "schedule.add"; title: string; date: string | null; start?: string; end?: string; rawDate?: string }
@@ -77,6 +84,8 @@ export function parseCommand(command: string, text: string, today = todayKST()):
   const [first, ...restArr] = raw.split(/\s+/);
   const rest = restArr.join(" ").trim();
   const sub = (first ?? "").toLowerCase();
+  // 줄바꿈을 살린 나머지 (작업일지 노트 본문용)
+  const restRaw = first ? raw.slice(raw.indexOf(first) + first.length).replace(/^[ \t]+/, "") : "";
   const isHelp = !raw || sub === "도움말" || sub === "help";
 
   if (kind === "할일") {
@@ -95,6 +104,12 @@ export function parseCommand(command: string, text: string, today = todayKST()):
     if (["보류", "hold", "백로그", "backlog"].includes(sub) && rest) return { kind: "todo.status", keyword: rest, status: "backlog" };
     if (["예정", "planned"].includes(sub) && rest) return { kind: "todo.status", keyword: rest, status: "planned" };
     if (["브리핑", "brief"].includes(sub)) return { kind: "todo.brief" };
+    if (["보내기", "push", "게시", "공유", "send"].includes(sub)) {
+      const words = rest.split(/\s+/).filter(Boolean);
+      const target = words.some((w) => ["작업일지", "worklog", "일지"].includes(w)) ? "작업일지" : "할일";
+      const scope = (["전체", "오늘", "주간"].find((sc) => words.includes(sc)) ?? "기본") as ListScope;
+      return { kind: "todo.push", target, scope };
+    }
     const spec = parseAddSpec(raw, today); // 하위 명령 없이 제목만 쓰면 "추가"
     return spec ? { kind: "todo.add", ...spec } : { kind: "help", command: "할일" };
   }
@@ -102,6 +117,15 @@ export function parseCommand(command: string, text: string, today = todayKST()):
   if (kind === "작업일지") {
     if (isHelp) return { kind: "help", command: "작업일지" };
     if (["생성", "generate", "마감", "정리"].includes(sub)) return { kind: "worklog.generate" };
+    // `노트`로 시작하거나 여러 줄이면 → 프로젝트 폴더에 작업일지 노트를 만든다
+    const isNote = ["노트", "note", "기록"].includes(sub);
+    if (isNote || raw.includes("\n")) {
+      const body = isNote ? restRaw : raw;
+      const [head, ...bodyLines] = body.split("\n");
+      const [title, projRaw, subRaw] = head.split("|").map((x) => x.trim());
+      if (!title) return { kind: "help", command: "작업일지" };
+      return { kind: "worklog.vaultnote", title, content: bodyLines.join("\n").trim(), project: projRaw || undefined, sub: subRaw || undefined };
+    }
     return { kind: "worklog.note", text: raw };
   }
 
@@ -142,11 +166,18 @@ export const HELP: Record<string, string> = {
     "• `/할일 목록 [전체|오늘|주간]` — 버튼으로 완료·진행 중·티켓 발급 대기",
     "• `/할일 완료|시작|검토|보류 키워드` — status: done / in-progress / review / backlog",
     "• `/할일 브리핑` — 아침 브리핑 지금 게시",
+    "• `/할일 보내기 [할일|작업일지] [전체|오늘|주간]` — 볼트 할일 목록을 그 채널에 게시 (예: `/할일 보내기 작업일지 오늘`)",
   ].join("\n"),
   작업일지: [
     "*📓 /작업일지 — 일일노트 `05_Daily/날짜.md`의 WorkHub 블록*",
     "• `/작업일지 오늘 한 일` — 메모 한 줄 추가 (여러 번 가능)",
     "• `/작업일지 생성` — 지금 바로 완료·진행·일정·메모를 정리해 #작업일지에 게시",
+    "*🗂 프로젝트 노트로 남기기* — `01_Projects/…/01_진행업무/MMDD_제목/MMDD_제목.md`",
+    "• `/작업일지 노트 제목` + Shift+Enter 로 줄바꿈 후 본문 — 제목·본문에서 프로젝트를 찾아 그 폴더에 저장합니다",
+    "• 못 찾으면 `제목 | 프로젝트` 또는 `제목 | 프로젝트 | 서브폴더` 로 알려 주세요",
+    "• 같은 이름의 노트가 있으면 덮어쓰지 않고 `## 진행`에 한 줄 덧붙입니다",
+    "*🔁 채널 사이 옮기기*",
+    "• 메시지 오른쪽 `⋯` → **작업일지로 보내기** — #할일 등 어느 채널의 메시지든 #작업일지로 옮기고 일일노트 메모로 남깁니다",
   ].join("\n"),
   일정: [
     "*📅 /일정 — Google Calendar*",
@@ -190,6 +221,16 @@ export async function addTask(spec: AddSpec, ctx: CommandContext): Promise<Comma
   return { inChannel: true, text: `✅ 할일 노트 생성: ${task.title}${calNote}`, blocks: [section(`✅ *할일 노트 생성* → \`${task.path}\`${calNote}`), ...taskCard(task)] };
 }
 
+/** 열린 할일 중 범위에 맞는 것 고르기 (목록·보내기 공용) */
+export async function pickTasks(scope: ListScope, today = todayKST()): Promise<{ picked: VaultTask[]; title: string }> {
+  const tasks = await listOpenTasks();
+  const weekEnd = addDays(today, 7);
+  if (scope === "전체") return { picked: tasks, title: "열린 할일 전체" };
+  if (scope === "오늘") return { picked: tasks.filter((t) => t.due && t.due <= today), title: "오늘 마감 + 지연" };
+  if (scope === "주간") return { picked: tasks.filter((t) => t.due && t.due <= weekEnd), title: "이번 주 마감 (지연 포함)" };
+  return { picked: tasks.filter((t) => (t.due && t.due <= weekEnd) || t.status === "in-progress" || t.status === "review"), title: "이번 주 + 진행 중" };
+}
+
 export async function executeCommand(p: Parsed, ctx: CommandContext): Promise<CommandReply> {
   const today = todayKST();
   switch (p.kind) {
@@ -200,13 +241,7 @@ export async function executeCommand(p: Parsed, ctx: CommandContext): Promise<Co
       return addTask(p, ctx);
 
     case "todo.list": {
-      const tasks = await listOpenTasks();
-      const weekEnd = addDays(today, 7);
-      let picked: VaultTask[]; let title: string;
-      if (p.scope === "전체") { picked = tasks; title = "열린 할일 전체"; }
-      else if (p.scope === "오늘") { picked = tasks.filter((t) => t.due && t.due <= today); title = "오늘 마감 + 지연"; }
-      else if (p.scope === "주간") { picked = tasks.filter((t) => t.due && t.due <= weekEnd); title = "이번 주 마감 (지연 포함)"; }
-      else { picked = tasks.filter((t) => (t.due && t.due <= weekEnd) || t.status === "in-progress" || t.status === "review"); title = "이번 주 + 진행 중"; }
+      const { picked, title } = await pickTasks(p.scope, today);
       if (!picked.length) return { text: `🎉 ${title}: 해당 할일이 없습니다.` };
       const blocks: unknown[] = [header(`📋 ${title} (${picked.length})`)];
       for (const t of picked.slice(0, 12)) blocks.push(...taskCard(t));
@@ -231,6 +266,50 @@ export async function executeCommand(p: Parsed, ctx: CommandContext): Promise<Co
       const stamp = new Intl.DateTimeFormat("ko-KR", { timeZone: config.timezone, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
       const path = await appendMemo(today, `${stamp} ${p.text}`);
       return { inChannel: true, text: `📝 작업일지 메모 추가: ${p.text}`, blocks: [section(`📝 *${prettyKST(today)} 작업일지 메모 추가*\n> ${p.text}`), context(`일일노트 \`${path}\` (WorkHub 블록)`)] };
+    }
+
+    case "todo.push": {
+      const channel = p.target === "작업일지" ? config.slack.channelWorklog : config.slack.channelTodo;
+      const { picked, title } = await pickTasks(p.scope, today);
+      if (!picked.length) return { text: `🎉 ${title}: 보낼 할일이 없습니다.` };
+      const blocks: unknown[] = [
+        header(`📋 ${title} (${picked.length})`),
+        context(`Obsidian 볼트 \`${config.vault.todoDir}\`에서 불러옴 · ${prettyKST(today)} · <@${ctx.userId}> 요청`),
+      ];
+      for (const t of picked.slice(0, 12)) blocks.push(...taskCard(t));
+      if (picked.length > 12) blocks.push(context(`…외 ${picked.length - 12}건`));
+      await postMessage(channel, `${title} ${picked.length}건`, blocks);
+      return { text: `📤 <#${channel}>에 ${title} ${picked.length}건을 올렸어요.` };
+    }
+
+    case "worklog.vaultnote": {
+      const r = await resolveWorkDir(`${p.title}\n${p.content}`, p.project, p.sub);
+      if (!r.ok && r.reason === "no-project") {
+        return { text: `⚠️ 어느 프로젝트인지 못 정했어요. 첫 줄을 \`${p.title} | 에너빌드\` 처럼 써 주세요.\n가능한 프로젝트: ${PROJECTS.join(", ")}` };
+      }
+      if (!r.ok && r.reason === "no-workdir") {
+        return { text: `⚠️ \`${r.project}\` 프로젝트 아래에 \`01_진행업무\` 폴더를 찾지 못했어요. Obsidian에서 폴더를 먼저 만들어 주세요 (봇은 폴더를 임의로 만들지 않습니다).` };
+      }
+      if (!r.ok) {
+        const labels = r.choices.map((c) => c.label || "(프로젝트 바로 아래)").join(", ");
+        return { text: `⚠️ \`${r.project}\`의 서브 프로젝트를 못 정했어요. 첫 줄을 \`${p.title} | ${r.project} | 에너지분석\` 처럼 써 주세요.\n선택지: ${labels}` };
+      }
+      const stamp = new Intl.DateTimeFormat("ko-KR", { timeZone: config.timezone, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
+      const note = await writeWorklogNote({
+        title: p.title, content: p.content, project: r.project, subProject: r.workDir.label,
+        workDir: r.workDir.path, time: stamp,
+        source: `Slack 작업일지 (${prettyKST(today)})${ctx.permalink ? ` — ${ctx.permalink}` : ""}`,
+      });
+      await appendMemo(today, `${stamp} ${p.title} → [[${note.path.replace(/\.md$/, "")}|노트]]`).catch(() => {});
+      return {
+        inChannel: true,
+        text: `${note.created ? "🗂 작업일지 노트 생성" : "➕ 작업일지 노트에 추가"}: ${p.title}`,
+        blocks: [
+          section(`${note.created ? "🗂 *작업일지 노트 생성*" : "➕ *기존 노트의 `## 진행`에 추가*"} → \`${note.path}\``),
+          ...(p.content ? [section(`> ${p.content.split("\n").join("\n> ")}`.slice(0, 2900))] : []),
+          context(`프로젝트 \`${r.project}\`${r.workDir.label ? ` · 서브 \`${r.workDir.label}\`` : ""} · 일일노트에도 메모를 남겼어요`),
+        ],
+      };
     }
 
     case "worklog.generate": {

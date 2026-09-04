@@ -4,16 +4,22 @@
  *   task_ticket            : notion: pending 표시
  *   task_project           : project 선택 후 할일 노트 생성
  *   cand_register / cand_ignore : Notion 할당 후보 → 노트 등록 / 무시
+ *
+ * 메시지 바로가기(message_action) — 메시지 `⋯` 메뉴
+ *   to_worklog : 그 메시지를 #작업일지 채널로 옮기고 오늘 일일노트 메모로 남김
+ *   to_note    : 그 메시지를 프로젝트 폴더의 작업일지 노트로 저장 (첫 줄 = 제목)
  */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { waitUntil } from "@vercel/functions";
 import { readRawBody, parseForm } from "../../src/lib/raw-body.js";
-import { section, taskCard, taskLine, verifySlackRequest } from "../../src/lib/slack.js";
+import { context, getPermalink, postMessage, section, taskCard, taskLine, verifySlackRequest } from "../../src/lib/slack.js";
 import { getTask, setStatus, STATUS_KO, type VaultStatus } from "../../src/lib/vault.js";
 import { ignoreCandidate, markPending, registerCandidate } from "../../src/lib/notion-sync.js";
 import { getTicket } from "../../src/lib/notion.js";
 import { syncTaskToCalendar } from "../../src/lib/gcal.js";
-import { addTask } from "../../src/lib/commands.js";
+import { addTask, executeCommand } from "../../src/lib/commands.js";
+import { appendMemo } from "../../src/lib/vault.js";
+import { prettyKST, todayKST } from "../../src/lib/dates.js";
 import { config as appConfig } from "../../src/lib/config.js";
 
 export const config = { api: { bodyParser: false } };
@@ -37,6 +43,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const payload = JSON.parse(parseForm(raw).payload ?? "{}");
+
+  // ── 메시지 바로가기: 다른 채널의 메시지를 작업일지로 ──
+  if (payload.type === "message_action") {
+    const callbackId: string = payload.callback_id ?? "";
+    const responseUrl: string = payload.response_url;
+    const text: string = (payload.message?.text ?? "").trim();
+    const srcChannel: string = payload.channel?.id ?? "";
+    const ts: string = payload.message?.message_ts ?? payload.message?.ts ?? "";
+    const author: string = payload.message?.user ?? payload.message?.bot_id ?? "";
+    if (!text) {
+      waitUntil(reply(responseUrl, "⚠️ 옮길 글이 비어 있어요 (파일·첨부만 있는 메시지는 옮길 수 없습니다)."));
+      return res.status(200).send("");
+    }
+
+    waitUntil((async () => {
+      try {
+        const today = todayKST();
+        const link = ts && srcChannel ? await getPermalink(srcChannel, ts) : null;
+        const origin = `<#${srcChannel}>${author.startsWith("U") ? ` · <@${author}>` : ""}${link ? ` · <${link}|원본 보기>` : ""}`;
+
+        if (callbackId === "to_note") {
+          const [head, ...rest] = text.split("\n");
+          const r = await executeCommand(
+            { kind: "worklog.vaultnote", title: head.trim().slice(0, 80), content: rest.join("\n").trim() },
+            { userId: payload.user?.id ?? "", channelId: srcChannel, permalink: link ?? undefined },
+          );
+          return reply(responseUrl, r.text, r.blocks);
+        }
+
+        // to_worklog (기본): #작업일지에 옮겨 붙이고 일일노트 메모로도 남긴다
+        await postMessage(appConfig.slack.channelWorklog, `📓 작업일지로 옮김: ${text.slice(0, 120)}`, [
+          section(`📓 *작업일지로 옮김*\n${text.slice(0, 2800)}`),
+          context(`${origin} · ${prettyKST(today)}`),
+        ]);
+        const memo = `${text.replace(/\s*\n\s*/g, " ").slice(0, 200)}${link ? ` ([Slack](${link}))` : ""}`;
+        const path = await appendMemo(today, memo);
+        return reply(responseUrl, `📓 <#${appConfig.slack.channelWorklog}>로 옮겼어요. 일일노트 \`${path}\`에도 메모로 남겼습니다.`);
+      } catch (e) {
+        return reply(responseUrl, `❌ 옮기기 실패: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    })());
+    return res.status(200).send("");
+  }
+
   if (payload.type !== "block_actions") return res.status(200).send("");
   const action = payload.actions?.[0];
   const actionId: string = action?.action_id ?? "";

@@ -28,6 +28,19 @@ export async function postMessage(channel: string, text: string, blocks?: unknow
   return slackApi<{ ts: string; channel: string }>("chat.postMessage", { channel, text, blocks, thread_ts: threadTs, unfurl_links: false });
 }
 
+/** 메시지 영구 링크 (실패하면 null — 권한이 없어도 동작은 계속) */
+export async function getPermalink(channel: string, messageTs: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${API}/chat.getPermalink?channel=${encodeURIComponent(channel)}&message_ts=${encodeURIComponent(messageTs)}`, {
+      headers: { Authorization: `Bearer ${config.slack.botToken}` },
+    });
+    const d = (await res.json()) as any;
+    return d.ok ? (d.permalink as string) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** 채널 + (설정돼 있으면) 나에게 DM */
 export async function notifyMe(channel: string, text: string, blocks?: unknown[]) {
   const r = await postMessage(channel, text, blocks);
