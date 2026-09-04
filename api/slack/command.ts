@@ -6,15 +6,21 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { waitUntil } from "@vercel/functions";
 import { readRawBody, parseForm } from "../../src/lib/raw-body.js";
-import { respondToCommand, verifySlackRequest } from "../../src/lib/slack.js";
+import { respondToCommand, verifyFailureMessage, verifySlackRequest } from "../../src/lib/slack.js";
 import { executeCommand, parseCommand } from "../../src/lib/commands.js";
 
 export const config = { api: { bodyParser: false } };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") return res.status(405).send("method not allowed");
-  const raw = await readRawBody(req);
-  if (!verifySlackRequest(req, raw)) return res.status(401).send("invalid signature");
+  const { raw, source } = await readRawBody(req);
+  const check = verifySlackRequest(req, raw);
+  if (!check.ok) {
+    // 401로 끊으면 Slack에는 "앱이 반응하지 않음"으로만 보여 원인을 알 수 없다.
+    // 200 + 안내문으로 돌려주어 무엇이 잘못됐는지 화면에서 바로 보이게 한다. 명령은 실행하지 않는다.
+    console.error("Slack 서명 검증 실패", { reason: check.reason, bodySource: source, bodyLength: raw.length });
+    return res.status(200).json({ response_type: "ephemeral", text: verifyFailureMessage(check.reason, source) });
+  }
 
   const form = parseForm(raw);
   const parsed = parseCommand(form.command ?? "", form.text ?? "");
