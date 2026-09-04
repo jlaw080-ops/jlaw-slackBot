@@ -40,6 +40,7 @@ export type Parsed =
   | { kind: "todo.brief" }
   | { kind: "worklog.note"; text: string }
   | { kind: "worklog.vaultnote"; title: string; content: string; project?: string; sub?: string }
+  | { kind: "worklog.modal"; title: string }
   | { kind: "todo.push"; target: "할일" | "작업일지"; scope: ListScope }
   | { kind: "worklog.generate" }
   | { kind: "schedule.list"; days: number; from: string }
@@ -121,7 +122,11 @@ export function parseCommand(command: string, text: string, today = todayKST()):
     const isNote = ["노트", "note", "기록"].includes(sub);
     if (isNote || raw.includes("\n")) {
       const body = isNote ? restRaw : raw;
-      const [head, ...bodyLines] = body.split("\n");
+      // Slack 슬래시 명령은 한 줄만 받는다 → 내용은 모달로 받는다
+      if (!body.trim()) return { kind: "worklog.modal", title: "" };
+      // 한 줄로 쓸 때는 `::` 뒤가 본문
+      const oneLine = body.includes("::") ? body.replace("::", "\n") : body;
+      const [head, ...bodyLines] = oneLine.split("\n");
       const [title, projRaw, subRaw] = head.split("|").map((x) => x.trim());
       if (!title) return { kind: "help", command: "작업일지" };
       return { kind: "worklog.vaultnote", title, content: bodyLines.join("\n").trim(), project: projRaw || undefined, sub: subRaw || undefined };
@@ -173,7 +178,8 @@ export const HELP: Record<string, string> = {
     "• `/작업일지 오늘 한 일` — 메모 한 줄 추가 (여러 번 가능)",
     "• `/작업일지 생성` — 지금 바로 완료·진행·일정·메모를 정리해 #작업일지에 게시",
     "*🗂 프로젝트 노트로 남기기* — `01_Projects/…/01_진행업무/MMDD_제목/MMDD_제목.md`",
-    "• `/작업일지 노트 제목` + Shift+Enter 로 줄바꿈 후 본문 — 제목·본문에서 프로젝트를 찾아 그 폴더에 저장합니다",
+    "• `/작업일지 노트` — 입력 창이 뜹니다. 제목·내용을 적고 저장하면 프로젝트를 찾아 그 폴더에 저장합니다 *(여러 줄은 이 방법으로)*",
+    "• 한 줄로 빠르게: `/작업일지 노트 계산서 검토 :: 1안 확인` — `::` 뒤가 내용입니다",
     "• 못 찾으면 `제목 | 프로젝트` 또는 `제목 | 프로젝트 | 서브폴더` 로 알려 주세요",
     "• 같은 이름의 노트가 있으면 덮어쓰지 않고 `## 진행`에 한 줄 덧붙입니다",
     "*🔁 채널 사이 옮기기*",
@@ -281,6 +287,10 @@ export async function executeCommand(p: Parsed, ctx: CommandContext): Promise<Co
       await postMessage(channel, `${title} ${picked.length}건`, blocks);
       return { text: `📤 <#${channel}>에 ${title} ${picked.length}건을 올렸어요.` };
     }
+
+    case "worklog.modal":
+      // 입력 창은 api/slack/command.ts에서 바로 엽니다 (trigger_id가 3초 안에 필요)
+      return { text: "🗂 입력 창을 열지 못했어요. 한 줄로 `/작업일지 노트 제목 :: 내용` 처럼 써 보세요." };
 
     case "worklog.vaultnote": {
       const r = await resolveWorkDir(`${p.title}\n${p.content}`, p.project, p.sub);

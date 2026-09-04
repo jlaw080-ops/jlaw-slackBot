@@ -153,3 +153,15 @@ describe("Slack 명령", () => {
     expect([...files.keys()].some((p) => p.startsWith("05_Daily/"))).toBe(true);
   });
 });
+
+describe("한 줄 입력 (Slack 슬래시 명령은 여러 줄을 받지 못한다)", () => {
+  it("`/작업일지 노트` 만 쓰면 입력 창을 연다", () => {
+    expect(parseCommand("/작업일지", "노트")).toEqual({ kind: "worklog.modal", title: "" });
+  });
+
+  it("`::` 뒤를 본문으로 읽는다", () => {
+    expect(parseCommand("/작업일지", "노트 계산서 검토 | 에너빌드 | 에너지분석 :: 1안 확인")).toMatchObject({
+      kind: "worklog.vaultnote", title: "계산서 검토", project: "에너빌드", sub: "에너지분석", content: "1안 확인",
+    });
+  });
+});

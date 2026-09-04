@@ -28,6 +28,11 @@ export async function postMessage(channel: string, text: string, blocks?: unknow
   return slackApi<{ ts: string; channel: string }>("chat.postMessage", { channel, text, blocks, thread_ts: threadTs, unfurl_links: false });
 }
 
+/** 모달 열기 (슬래시 명령의 trigger_id는 3초 안에 써야 합니다) */
+export async function openView(triggerId: string, view: unknown) {
+  return slackApi("views.open", { trigger_id: triggerId, view });
+}
+
 /** 메시지 영구 링크 (실패하면 null — 권한이 없어도 동작은 계속) */
 export async function getPermalink(channel: string, messageTs: string): Promise<string | null> {
   try {
@@ -169,4 +174,34 @@ export function projectPicker(spec: Record<string, unknown>, projects: readonly 
     ...(projects.length > 5 ? [{ type: "actions", block_id: "pick_project2", elements: projects.slice(5, 10).map((p) => btn(p, "task_project", JSON.stringify({ ...spec, project: p }))) }] : []),
     context(`또는 \`/할일 추가 제목 | 마감 | 우선순위 | 프로젝트\` 로 프로젝트를 직접 적어 주세요. 우선순위·상태는 ${Object.values(PRIORITY_KO).join("/")}, ${Object.values(STATUS_KO).join("/")}`),
   ];
+}
+
+/**
+ * 작업일지 노트 입력 모달.
+ * Slack 슬래시 명령은 **한 줄만** 받기 때문에(Shift+Enter로 줄을 바꾸면 명령이 아니라 그냥 글이 됩니다)
+ * 여러 줄 본문은 이 모달로 받습니다.
+ */
+export function noteModal(channelId: string, projects: readonly string[], prefillTitle = "") {
+  const input = (block_id: string, label: string, element: Record<string, unknown>, optional = false, hint?: string) => ({
+    type: "input", block_id, optional, label: { type: "plain_text", text: label, emoji: true },
+    element, ...(hint ? { hint: { type: "plain_text", text: hint, emoji: true } } : {}),
+  });
+  return {
+    type: "modal",
+    callback_id: "note_modal",
+    private_metadata: JSON.stringify({ channel: channelId }),
+    title: { type: "plain_text", text: "작업일지 노트", emoji: true },
+    submit: { type: "plain_text", text: "저장", emoji: true },
+    close: { type: "plain_text", text: "취소", emoji: true },
+    blocks: [
+      input("title", "제목 (노트 이름이 됩니다)", { type: "plain_text_input", action_id: "v", initial_value: prefillTitle.slice(0, 150), placeholder: { type: "plain_text", text: "예) 계산서 검토" } }),
+      input("content", "내용", { type: "plain_text_input", action_id: "v", multiline: true, placeholder: { type: "plain_text", text: "여러 줄로 편하게 쓰세요" } }, true),
+      input("project", "프로젝트", {
+        type: "static_select", action_id: "v", placeholder: { type: "plain_text", text: "비워 두면 제목·내용에서 자동으로 찾습니다" },
+        options: projects.map((p) => ({ text: { type: "plain_text", text: p.slice(0, 75) }, value: p })),
+      }, true),
+      input("sub", "서브 폴더", { type: "plain_text_input", action_id: "v", placeholder: { type: "plain_text", text: "예) 에너지분석 — 비워 두면 자동" } }, true,
+        "01_Projects/<프로젝트>/<서브>/01_진행업무/ 아래에 저장됩니다"),
+    ],
+  };
 }

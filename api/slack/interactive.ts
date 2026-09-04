@@ -19,6 +19,7 @@ import { getTicket } from "../../src/lib/notion.js";
 import { syncTaskToCalendar } from "../../src/lib/gcal.js";
 import { addTask, executeCommand } from "../../src/lib/commands.js";
 import { appendMemo } from "../../src/lib/vault.js";
+import { resolveWorkDir } from "../../src/lib/notes.js";
 import { prettyKST, todayKST } from "../../src/lib/dates.js";
 import { config as appConfig } from "../../src/lib/config.js";
 
@@ -43,6 +44,48 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const payload = JSON.parse(parseForm(raw).payload ?? "{}");
+
+  // ── 작업일지 노트 입력 창 저장 ──
+  if (payload.type === "view_submission" && payload.view?.callback_id === "note_modal") {
+    const v = payload.view.state?.values ?? {};
+    const title = (v.title?.v?.value ?? "").trim();
+    const content = (v.content?.v?.value ?? "").trim();
+    const project = v.project?.v?.selected_option?.value || undefined;
+    const sub = (v.sub?.v?.value ?? "").trim() || undefined;
+    const channel = (() => { try { return JSON.parse(payload.view.private_metadata || "{}").channel as string; } catch { return ""; } })();
+    const userId: string = payload.user?.id ?? "";
+
+    // 프로젝트를 못 정하면 창을 닫지 않고 그 자리에서 알려 준다 (쓴 내용이 사라지지 않게)
+    let resolved;
+    try {
+      resolved = await Promise.race([
+        resolveWorkDir(`${title}\n${content}`, project, sub),
+        new Promise<null>((r) => setTimeout(() => r(null), 2200)),
+      ]);
+    } catch (e) {
+      return res.status(200).json({ response_action: "errors", errors: { title: `볼트를 읽지 못했어요: ${e instanceof Error ? e.message : e}` } });
+    }
+    if (resolved && !resolved.ok) {
+      const msg = resolved.reason === "no-project"
+        ? "어느 프로젝트인지 못 찾았어요. 아래 '프로젝트'에서 골라 주세요."
+        : resolved.reason === "no-workdir"
+          ? `'${resolved.project}' 아래에 01_진행업무 폴더가 없어요. Obsidian에서 폴더를 먼저 만들어 주세요.`
+          : `'${resolved.project}'의 서브 폴더를 골라 주세요: ${resolved.choices.map((c) => c.label || "(바로 아래)").join(", ")}`;
+      return res.status(200).json({ response_action: "errors", errors: { [resolved.reason === "no-project" ? "project" : "sub"]: msg.slice(0, 150) } });
+    }
+
+    // 판정이 끝났으면 창은 닫고 저장은 뒤에서 (GitHub 쓰기가 3초를 넘을 수 있음)
+    waitUntil((async () => {
+      const target = channel || userId;
+      try {
+        const r = await executeCommand({ kind: "worklog.vaultnote", title, content, project, sub }, { userId, channelId: channel });
+        if (target) await postMessage(target, r.text, r.blocks);
+      } catch (e) {
+        if (target) await postMessage(target, `❌ 작업일지 노트 저장 실패: ${e instanceof Error ? e.message : String(e)}`).catch(() => {});
+      }
+    })());
+    return res.status(200).json({ response_action: "clear" });
+  }
 
   // ── 메시지 바로가기: 다른 채널의 메시지를 작업일지로 ──
   if (payload.type === "message_action") {
