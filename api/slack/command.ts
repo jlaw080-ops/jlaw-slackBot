@@ -6,8 +6,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { waitUntil } from "@vercel/functions";
 import { readRawBody, parseForm } from "../../src/lib/raw-body.js";
-import { respondToCommand, verifyFailureMessage, verifySlackRequest } from "../../src/lib/slack.js";
+import { noteModal, openView, respondToCommand, verifyFailureMessage, verifySlackRequest } from "../../src/lib/slack.js";
 import { executeCommand, parseCommand } from "../../src/lib/commands.js";
+import { PROJECTS } from "../../src/lib/vault.js";
 
 export const config = { api: { bodyParser: false } };
 
@@ -30,6 +31,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (parsed.kind === "help") {
     const reply = await executeCommand(parsed, ctx);
     return res.status(200).json({ response_type: "ephemeral", text: reply.text, blocks: reply.blocks });
+  }
+
+  // 입력 창(모달)은 trigger_id가 3초 안에만 유효하므로 바로 엽니다
+  if (parsed.kind === "worklog.modal") {
+    try {
+      await openView(form.trigger_id ?? "", noteModal(form.channel_id ?? "", PROJECTS, parsed.title));
+      return res.status(200).send("");
+    } catch (e) {
+      console.error("views.open 실패", e);
+      return res.status(200).json({ response_type: "ephemeral", text: `⚠️ 입력 창을 열지 못했어요 (${e instanceof Error ? e.message : e}). 한 줄로 \`/작업일지 노트 제목 :: 내용\` 처럼 써 보세요.` });
+    }
   }
 
   const work = (async () => {
