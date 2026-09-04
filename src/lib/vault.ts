@@ -350,14 +350,23 @@ export function priorityForTicket(notionPriority: string, due: string | null, to
 // ---------- 무시 목록 (Notion 할당 후보 중 등록하지 않기로 한 것) ----------
 const IGNORE_PATH = () => `${config.vault.metaDir}/notion-ignored.txt`;
 
+/** 한 줄은 `<32자리 ID>  # <날짜> <제목>` 형식. ID만 뽑아 낸다 */
 export async function readIgnored(): Promise<Set<string>> {
   const f = await gh.readFile(IGNORE_PATH());
-  return new Set((f?.content ?? "").split("\n").map((l) => l.trim()).filter(Boolean));
+  const ids = (f?.content ?? "")
+    .split("\n")
+    .map((l) => l.split("#")[0].trim().toLowerCase())
+    .filter((id) => /^[0-9a-f]{32}$/.test(id));
+  return new Set(ids);
 }
+
 export async function addIgnored(notionId: string, title: string): Promise<void> {
+  const id = notionId.replace(/-/g, "").toLowerCase();
   const f = await gh.readFile(IGNORE_PATH());
-  const content = `${(f?.content ?? "").replace(/\s+$/, "")}\n${notionId}  # ${todayKST()} ${title}\n`.replace(/^\n/, "");
-  await gh.writeFile(IGNORE_PATH(), content, `workhub: Notion 티켓 무시 ${title}`, f?.sha);
+  const existing = f?.content ?? "";
+  if (new RegExp(`^${id}\\b`, "im").test(existing)) return; // 이미 무시 중
+  const head = existing.trim() ? `${existing.replace(/\s+$/, "")}\n` : "# workhub: 할일로 등록하지 않기로 한 Notion 티켓 ID\n";
+  await gh.writeFile(IGNORE_PATH(), `${head}${id}  # ${todayKST()} ${title}\n`, `workhub: Notion 티켓 무시 ${title}`, f?.sha);
 }
 
 // ---------- 일일노트 작업일지 블록 ----------
