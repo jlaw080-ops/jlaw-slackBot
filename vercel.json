@@ -1,0 +1,15 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/cron/daily-brief.ts": { "maxDuration": 60 },
+    "api/cron/worklog.ts": { "maxDuration": 60 },
+    "api/notion/pull.ts": { "maxDuration": 60 },
+    "api/slack/command.ts": { "maxDuration": 60 },
+    "api/slack/interactive.ts": { "maxDuration": 60 },
+    "api/notion/webhook.ts": { "maxDuration": 60 }
+  },
+  "crons": [
+    { "path": "/api/cron/daily-brief", "schedule": "0 23 * * *" },
+    { "path": "/api/cron/worklog", "schedule": "0 9 * * *" }
+  ]
+}
