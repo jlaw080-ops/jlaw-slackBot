@@ -114,7 +114,9 @@ function yamlValue(v: unknown): string {
 }
 /** todo-capture 노트처럼 따옴표 없이 쓰되, YAML이 오해할 문자가 있으면 따옴표 */
 function yamlScalar(s: string): string {
-  return /[:#\[\]{}&*!|>'"%@`,]|^\s|\s$|^(true|false|null|~)$/i.test(s) ? JSON.stringify(s) : s;
+  const needsQuote =
+    /^[\s\-?:,\[\]{}#&*!|>'"%@`]/.test(s) || /:\s|\s#/.test(s) || /\s$/.test(s) || /^(true|false|null|~|yes|no)$/i.test(s);
+  return needsQuote ? JSON.stringify(s) : s;
 }
 
 export function renderFrontmatter(fm: Record<string, unknown>, order: string[] = []): string {
@@ -137,7 +139,11 @@ export function newTaskPath(title: string, date = todayKST()): string {
   return `${config.vault.todoDir}/${y}-${m}/${m}${d}_${safeFileName(title)}.md`;
 }
 
-const str = (fm: Record<string, unknown>, k: string) => (typeof fm[k] === "string" && (fm[k] as string).trim() ? (fm[k] as string).trim() : null);
+const str = (fm: Record<string, unknown>, k: string) => {
+  const v = fm[k];
+  if (typeof v === "number") return String(v);
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+};
 
 export function fileToTask(file: gh.VaultFile): VaultTask {
   const { fm, order, body } = parseFrontmatter(file.content);

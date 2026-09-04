@@ -181,3 +181,12 @@ describe("notion 티켓", () => {
     expect(tk).toMatchObject({ id: "3cdc74945236801299cee4e4a816bfd4", title: "[Step3] ALT 용량", status: "테스트 중", priority: "중간", due: "2026-09-10", assigneeIds: ["u1"] });
   });
 });
+
+describe("YAML 렌더 세부", () => {
+  it("URL·괄호는 따옴표 없이, 콜론+공백은 따옴표", () => {
+    const md = renderFrontmatter({ "notion-url": "https://app.notion.com/p/abc", sub_project: "에너지분석(에너빌드)", memo: "제목: 부제" });
+    expect(md).toContain("notion-url: https://app.notion.com/p/abc");
+    expect(md).toContain("sub_project: 에너지분석(에너빌드)");
+    expect(md).toContain('memo: "제목: 부제"');
+  });
+});

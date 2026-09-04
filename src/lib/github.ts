@@ -43,16 +43,21 @@ export async function readBlob(path: string, sha: string): Promise<VaultFile> {
   return { path, sha, content: Buffer.from(data.content, "base64").toString("utf8") };
 }
 
-/** 저장소 전체(또는 하위 경로) 트리를 재귀로 한 번에 가져옵니다 — 경로와 SHA만, 내용 없음 */
+/** 저장소 전체 트리를 재귀로 한 번에 가져와(경로·SHA만) 하위 경로로 거릅니다 */
+let treeCache: { at: number; entries: TreeEntry[] } | null = null;
 export async function listTree(subdir?: string): Promise<TreeEntry[]> {
-  const treeish = subdir ? `${config.vault.branch}:${subdir}` : config.vault.branch;
-  const res = await fetch(`${API}/repos/${config.vault.repo}/git/trees/${encodeURIComponent(treeish)}?recursive=1`, { headers: headers() });
-  if (res.status === 404) return [];
-  await ensureOk(res, `GitHub 트리 ${subdir ?? "/"}`);
-  const data = (await res.json()) as any;
-  const prefix = subdir ? `${subdir}/` : "";
-  return (data.tree ?? []).map((t: any) => ({ path: `${prefix}${t.path}`, sha: t.sha, type: t.type, size: t.size }));
+  if (!treeCache || Date.now() - treeCache.at > 15_000) {
+    const res = await fetch(`${API}/repos/${config.vault.repo}/git/trees/${ref()}?recursive=1`, { headers: headers() });
+    if (res.status === 404) return [];
+    await ensureOk(res, "GitHub 트리");
+    const data = (await res.json()) as any;
+    if (data.truncated) console.warn("GitHub 트리가 잘렸습니다(파일이 너무 많음). 일부 노트를 놓칠 수 있습니다.");
+    treeCache = { at: Date.now(), entries: (data.tree ?? []).map((t: any) => ({ path: t.path, sha: t.sha, type: t.type, size: t.size })) };
+  }
+  const prefix = subdir ? `${subdir.replace(/\/$/, "")}/` : "";
+  return treeCache.entries.filter((t) => t.path.startsWith(prefix));
 }
+export function invalidateTreeCache() { treeCache = null; }
 
 /** 여러 파일을 병렬로 읽습니다 (동시 8개) */
 export async function readMany(entries: Array<{ path: string; sha: string }>): Promise<VaultFile[]> {
@@ -83,5 +88,6 @@ export async function writeFile(path: string, content: string, message: string, 
     }),
   });
   await ensureOk(res, `GitHub 쓰기 ${path}`);
+  invalidateTreeCache();
   return true;
 }
