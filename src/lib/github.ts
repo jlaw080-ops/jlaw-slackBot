@@ -35,12 +35,24 @@ export async function readFile(path: string): Promise<VaultFile | null> {
   return { path, sha: data.sha, content: Buffer.from(data.content, "base64").toString("utf8") };
 }
 
-/** blob SHA로 내용 읽기 (트리 스캔 후 병렬 읽기용) */
+/**
+ * blob SHA로 내용 읽기 (트리 스캔 후 병렬 읽기용).
+ * 같은 SHA의 내용은 영원히 바뀌지 않으므로 캐시해도 안전합니다.
+ * 한 번의 호출 안에서 같은 노트를 여러 번 읽는 경로(브리핑·중복검사)가 겹쳐도 API를 한 번만 씁니다.
+ */
+const blobCache = new Map<string, string>();
+const BLOB_CACHE_MAX = 800;
+
 export async function readBlob(path: string, sha: string): Promise<VaultFile> {
+  const hit = blobCache.get(sha);
+  if (hit !== undefined) return { path, sha, content: hit };
   const res = await fetch(`${API}/repos/${config.vault.repo}/git/blobs/${sha}`, { headers: headers() });
   await ensureOk(res, `GitHub blob ${path}`);
   const data = (await res.json()) as any;
-  return { path, sha, content: Buffer.from(data.content, "base64").toString("utf8") };
+  const content = Buffer.from(data.content, "base64").toString("utf8");
+  if (blobCache.size >= BLOB_CACHE_MAX) blobCache.clear();
+  blobCache.set(sha, content);
+  return { path, sha, content };
 }
 
 /** 저장소 전체 트리를 재귀로 한 번에 가져와(경로·SHA만) 하위 경로로 거릅니다 */
@@ -59,11 +71,11 @@ export async function listTree(subdir?: string): Promise<TreeEntry[]> {
 }
 export function invalidateTreeCache() { treeCache = null; }
 
-/** 여러 파일을 병렬로 읽습니다 (동시 8개) */
+/** 여러 파일을 병렬로 읽습니다 (동시 16개) */
 export async function readMany(entries: Array<{ path: string; sha: string }>): Promise<VaultFile[]> {
   const out: VaultFile[] = [];
-  for (let i = 0; i < entries.length; i += 8) {
-    const chunk = entries.slice(i, i + 8);
+  for (let i = 0; i < entries.length; i += 16) {
+    const chunk = entries.slice(i, i + 16);
     const got = await Promise.all(chunk.map((e) => readBlob(e.path, e.sha).catch(() => null)));
     for (const f of got) if (f) out.push(f);
   }

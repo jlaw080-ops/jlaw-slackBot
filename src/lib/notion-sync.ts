@@ -10,7 +10,7 @@
  */
 import { config } from "./config.js";
 import {
-  findMentionInComments, getTicketSummary, getTicketsStatus, listActiveTicketsNotMine, listTicketsAssignedToMe,
+  findMentionInComments, getTicketSummary, getTicketsStatus, listActiveTicketsNotMine, listTicketsAssignedToMe, mapLimit,
   type MentionHit, type Ticket,
 } from "./notion.js";
 import {
@@ -52,11 +52,11 @@ export async function findAssignedCandidates(opts: { scanComments?: boolean } = 
   if (opts.scanComments !== false) {
     const { tickets, total } = await listActiveTicketsNotMine();
     result.commentScan = { scanned: tickets.length, total };
-    for (const t of tickets) {
-      if (links.has(t.id) || ignoredSet.has(t.id)) continue;
-      const hit = await findMentionInComments(t.id);
-      if (hit) consider(t, "mentioned", hit);
-    }
+    // 이미 볼트에 있거나 무시한 티켓은 댓글을 열어보지 않는다
+    const toScan = tickets.filter((t) => !links.has(t.id) && !ignoredSet.has(t.id));
+    // 순차로 돌리면 40건에 10초 이상 걸려 함수 제한 시간을 넘긴다 → 3건씩 병렬 (Notion 요청 제한 안쪽)
+    const hits = await mapLimit(toScan, 3, async (t) => ({ t, hit: await findMentionInComments(t.id).catch(() => null) }));
+    for (const { t, hit } of hits) if (hit) consider(t, "mentioned", hit);
   }
   return result;
 }

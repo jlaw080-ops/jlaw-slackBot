@@ -28,15 +28,34 @@ export interface Ticket {
   lastEdited: string;
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Notion은 초당 약 3건으로 제한되므로 429가 오면 Retry-After만큼 기다렸다 두 번까지 다시 시도합니다 */
 async function notion<T = any>(path: string, init: Omit<RequestInit, "body"> & { body?: unknown } = {}): Promise<T> {
   if (!config.notion.enabled) throw new Error("Notion 연동이 꺼져 있습니다 (NOTION_TOKEN 미설정)");
-  const res = await fetch(`${API}${path}`, {
-    ...init,
-    headers: { Authorization: `Bearer ${config.notion.token}`, "Notion-Version": VERSION, "Content-Type": "application/json", ...(init.headers ?? {}) },
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
-  });
-  await ensureOk(res, `Notion ${init.method ?? "GET"} ${path}`);
-  return res.json() as Promise<T>;
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${API}${path}`, {
+      ...init,
+      headers: { Authorization: `Bearer ${config.notion.token}`, "Notion-Version": VERSION, "Content-Type": "application/json", ...(init.headers ?? {}) },
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    });
+    if (res.status === 429 && attempt < 2) {
+      const wait = Number(res.headers.get("retry-after") ?? "1");
+      await sleep(Math.min(Math.max(wait, 1), 5) * 1000);
+      continue;
+    }
+    await ensureOk(res, `Notion ${init.method ?? "GET"} ${path}`);
+    return res.json() as Promise<T>;
+  }
+}
+
+/** 동시 실행 수를 제한해 순서대로 처리 (Notion 요청 제한 대응) */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += limit) {
+    out.push(...await Promise.all(items.slice(i, i + limit).map(fn)));
+  }
+  return out;
 }
 
 const P = {
@@ -122,14 +141,16 @@ export async function findMentionInComments(pageId: string): Promise<MentionHit 
   return null;
 }
 
-/** 여러 티켓 상태 한 번에 (실패한 것은 건너뜀) */
+/** 여러 티켓 상태 한 번에 (동시 3건, 실패한 것은 건너뜀) */
 export async function getTicketsStatus(pageIds: string[]): Promise<Map<string, Ticket>> {
   const out = new Map<string, Ticket>();
-  await Promise.all(pageIds.map(async (id) => {
+  await mapLimit([...new Set(pageIds)], 3, async (id) => {
     try { const t = await getTicket(id); out.set(t.id, t); } catch { /* 삭제된 티켓 등 */ }
-  }));
+  });
   return out;
 }
+
+export { mapLimit };
 
 /** 티켓 본문에서 배경·요청 요약 몇 줄 (노트 "배경"·"체크리스트" 힌트용). 전문 복사는 하지 않음 */
 export async function getTicketSummary(pageId: string): Promise<{ background: string[]; checklist: string[] }> {
