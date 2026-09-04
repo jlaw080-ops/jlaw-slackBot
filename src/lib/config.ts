@@ -2,10 +2,11 @@
  * 환경변수 설정 모음.
  *
  * 역할 분담
- *  - Obsidian 볼트(GitHub 저장소) = 창고(원본). 할일·작업일지가 여기 마크다운으로 저장됩니다.  [필수]
+ *  - Obsidian 볼트(GitHub 저장소) = 창고(원본). 할일 노트·일일노트가 여기 있습니다.        [필수]
+ *    볼트 규칙은 기존 스킬(todo-capture / notion-todo-sync / notion-qa-ticket)과 Vault-Kanban 앱이 정본입니다.
  *  - Slack = 조작 화면(명령·알림)                                                        [필수]
  *  - Google Calendar = 일정                                                              [선택]
- *  - Notion = 에너빌드 스프린트 보드. 티켓 발급 / 나에게 할당된 티켓 가져오기 / 상태 확인만  [선택]
+ *  - Notion = 에너빌드 스프린트 보드. 할당된 티켓 가져오기 / 상태 확인 / 티켓 발급 대기 표시  [선택]
  */
 function req(name: string): string {
   const v = process.env[name];
@@ -24,12 +25,16 @@ export const config = {
     get repo() { return req("VAULT_REPO"); },          // 예: jlaw080-ops/obsidian-vault
     branch: opt("VAULT_BRANCH", "main"),
     get token() { return req("GITHUB_TOKEN"); },       // Contents: Read and write 권한
-    root: opt("VAULT_ROOT", "WorkHub"),                 // 볼트 안에서 봇이 관리하는 최상위 폴더
-    get tasksDir() { return `${this.root}/Tasks`; },     // 열린 할일
-    get archiveDir() { return `${this.root}/Archive`; }, // 완료된 할일 (YYYY-MM 하위 폴더)
-    get worklogDir() { return `${this.root}/Worklog`; }, // 날짜별 작업일지
-    /** Obsidian URI를 만들 때 쓰는 볼트 이름 (Obsidian에서 열기 링크). 비우면 링크 생략 */
-    obsidianVaultName: opt("OBSIDIAN_VAULT_NAME"),
+    /** 할일 노트 폴더 (todo-capture 정본: 06_To Do/YYYY-MM/MMDD_제목.md) */
+    todoDir: opt("VAULT_TODO_DIR", "06_To Do"),
+    /** 일일노트 폴더 (05_Daily/YYYY-MM-DD.md 또는 05_Daily/YYYY-MM/YYYY-MM-DD.md) */
+    dailyDir: opt("VAULT_DAILY_DIR", "05_Daily"),
+    /** 프로젝트 폴더 (notion-qa-ticket이 만든 진행업무 노트의 notion-url 중복 검사용) */
+    projectsDir: opt("VAULT_PROJECTS_DIR", "01_Projects"),
+    /** 봇 메타데이터 폴더 (무시한 Notion 티켓 목록 등). 점(.)으로 시작해 Obsidian에서는 보이지 않음 */
+    metaDir: opt("VAULT_META_DIR", ".workhub"),
+    /** Obsidian URI를 만들 때 쓰는 볼트 이름 (기본: Vault_jlaw80). 비우면 링크 생략 */
+    obsidianVaultName: opt("OBSIDIAN_VAULT_NAME", "Vault_jlaw80"),
   },
 
   slack: {
@@ -47,6 +52,8 @@ export const config = {
     ticketsDbId: opt("NOTION_TICKETS_DB_ID", "4abb47d5588f43fd83e83fe943082cd8"), // 에너빌드작업
     meUserId: opt("NOTION_ME_USER_ID", "63428ed9-eebd-4bcc-9d76-cb550c3e528d"),
     webhookSecret: opt("NOTION_WEBHOOK_SECRET"),
+    /** 댓글 멘션 스캔 상한 (notion-todo-sync 스킬과 동일하게 40건) */
+    commentScanLimit: Number(opt("NOTION_COMMENT_SCAN_LIMIT", "40")),
     get enabled() { return Boolean(this.token); },
   },
 

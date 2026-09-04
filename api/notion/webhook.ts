@@ -1,21 +1,20 @@
 /**
- * Notion → 할당 감지 → 볼트 할일 등록 + Slack 알림
+ * Notion → 할당 감지 → Slack에 "할일로 등록할까요?" 후보 카드 (확인 후 볼트 노트 생성)
  *
- * 설정 방법 (둘 중 하나, 둘 다도 가능)
+ * 설정 (둘 중 하나, 둘 다도 가능)
  *  A) Notion DB 자동화: 트리거 "담당자 속성 변경" → 작업 "웹훅 보내기"
  *     URL: https://<배포주소>/api/notion/webhook?secret=NOTION_WEBHOOK_SECRET
- *  B) Notion 통합(Integration) 웹훅 구독: page.properties_updated, comment.created 이벤트
- *     → 코멘트에서 내가 멘션되면 그 페이지도 할일로 등록
+ *  B) Notion 통합(Integration) 웹훅 구독: page.properties_updated, comment.created
  *
  * 놓치는 경우를 대비해 아침 브리핑과 /티켓 할당 명령이 Notion을 직접 조회해 보완합니다.
+ * notion-todo-sync 스킬 규칙대로, 확인 없이 노트를 만들지 않습니다.
  */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { json } from "../../src/lib/http.js";
 import { config } from "../../src/lib/config.js";
-import { getTicket, isMentionedInComments } from "../../src/lib/notion.js";
-import { registerTicketAsTask } from "../../src/lib/notion-sync.js";
-import { context, notifyMe, section, taskCard } from "../../src/lib/slack.js";
-import { listOpenTasks } from "../../src/lib/vault.js";
+import { findMentionInComments, getTicket, TICKET_ACTIVE } from "../../src/lib/notion.js";
+import { candidateCard, context, notifyMe, section } from "../../src/lib/slack.js";
+import { collectNotionLinks, readIgnored } from "../../src/lib/vault.js";
 
 function findPageId(body: any): string | null {
   const cands = [body?.data?.id, body?.page?.id, body?.entity?.id, body?.data?.parent?.id, body?.data?.page_id, body?.id, body?.data?.page?.id];
@@ -42,28 +41,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let pageId: string = foundId;
 
   try {
-    // 코멘트 이벤트면 코멘트가 달린 페이지를 기준으로 멘션 여부 확인
     let reason: "assigned" | "mentioned" | null = null;
+    let mention: Awaited<ReturnType<typeof findMentionInComments>> = null;
     if (eventType.startsWith("comment")) {
-      const parent: string = body?.data?.parent?.id ?? body?.entity?.parent?.id ?? pageId;
-      pageId = parent;
-      if (await isMentionedInComments(parent)) reason = "mentioned";
+      pageId = body?.data?.parent?.id ?? body?.entity?.parent?.id ?? pageId;
+      mention = await findMentionInComments(pageId);
+      if (mention) reason = "mentioned";
     }
     const ticket = await getTicket(pageId);
     if (ticket.assigneeIds.includes(config.notion.meUserId)) reason = reason ?? "assigned";
     if (!reason) return json(res, 200, { ok: true, skipped: "not assigned/mentioned to me", ticket: ticket.title });
+    if (!TICKET_ACTIVE.includes(ticket.status)) return json(res, 200, { ok: true, skipped: `inactive status ${ticket.status}` });
 
-    const already = (await listOpenTasks()).some((t) => t.notionId === ticket.id);
-    const task = await registerTicketAsTask(ticket);
-    if (!already) {
-      const label = reason === "mentioned" ? "코멘트에서 멘션됨" : "담당자로 지정됨";
-      await notifyMe(config.slack.channelWork, `📌 Notion 티켓 ${label}: ${ticket.title}`, [
-        section(`📌 *Notion 티켓 ${label}* → 할일로 등록했어요`),
-        ...taskCard(task),
-        context(`Notion 상태 ${ticket.status || "-"} · 우선순위 ${ticket.priority || "-"} · 볼트 \`${task.path}\``),
-      ]);
-    }
-    return json(res, 200, { ok: true, reason, ticket: ticket.title, registered: !already });
+    const [links, ignored] = await Promise.all([collectNotionLinks(), readIgnored()]);
+    if (links.has(ticket.id)) return json(res, 200, { ok: true, skipped: "already in vault", path: links.get(ticket.id) });
+    if (ignored.has(ticket.id)) return json(res, 200, { ok: true, skipped: "ignored" });
+
+    const label = reason === "mentioned" ? "댓글에서 멘션됨" : "담당자로 지정됨";
+    await notifyMe(config.slack.channelWork, `📌 Notion 티켓 ${label}: ${ticket.title}`, [
+      section(`📌 *Notion 티켓 ${label}* — 할일로 등록할까요?`),
+      ...candidateCard({ ticket, reason, mention: mention ?? undefined }),
+      context(`Notion 상태 ${ticket.status || "-"} · 우선순위 ${ticket.priority || "-"} · 등록하면 \`06_To Do/\`에 \`notion: assigned\` 노트가 생깁니다`),
+    ]);
+    return json(res, 200, { ok: true, reason, ticket: ticket.title, notified: true });
   } catch (e) {
     console.error(e);
     return json(res, 500, { ok: false, error: e instanceof Error ? e.message : String(e) });

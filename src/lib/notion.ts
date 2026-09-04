@@ -1,25 +1,26 @@
 /**
- * Notion = 에너빌드 스프린트 보드(에너빌드작업 DB). 접점은 세 가지뿐입니다.
- *  1) 티켓 발급: 볼트/Slack 할일 → Notion 티켓 생성 ([QA]Title 템플릿 구조)
- *  2) 할당 감지: 담당자가 나이거나 코멘트에서 멘션된 티켓 → 볼트 할일로 등록
- *  3) 상태 확인: 내가 발급한/할당받은 티켓의 진행 상태 조회
+ * Notion = 에너빌드 스프린트 보드(에너빌드작업 DB). 봇은 읽기만 합니다.
+ *  - 담당자가 나인 활성 티켓 / 댓글 멘션 티켓 조회  (notion-todo-sync 스킬과 같은 규칙)
+ *  - 연결된 티켓의 현재 상태 조회
+ *  - 티켓 본문 요약 (배경·체크리스트 힌트)
+ * 티켓 "발급"은 notion-qa-ticket 스킬(Claude Code)이 담당합니다. 봇은 발급 대기 표시만 합니다.
  */
 import { config } from "./config.js";
 import { ensureOk } from "./http.js";
-import type { Priority } from "./vault.js";
 
 const API = "https://api.notion.com/v1";
 const VERSION = "2022-06-28";
 
 export type TicketStatus = "시작 전" | "진행 중" | "테스트 중" | "보완검토중" | "업무제외" | "완료" | "보관" | "";
+export const TICKET_ACTIVE: TicketStatus[] = ["시작 전", "보완검토중", "진행 중", "테스트 중"];
 export const TICKET_DONE: TicketStatus[] = ["완료", "보관", "업무제외"];
 
 export interface Ticket {
-  id: string;
+  id: string;        // 32자리 hex (하이픈 없음)
   url: string;
   title: string;
   status: TicketStatus;
-  priority: Priority | "";
+  priority: string;  // 높음 / 중간 / 낮음 / ""
   due: string | null;
   tags: string[];
   assigneeIds: string[];
@@ -51,7 +52,7 @@ export function pageToTicket(page: any): Ticket {
   const pr = page.properties ?? {};
   const people = P.people(pr["담당자"]);
   return {
-    id: page.id,
+    id: String(page.id).replace(/-/g, "").toLowerCase(),
     url: page.url,
     title: P.title(pr["작업"]),
     status: P.status(pr["진행 상태"]),
@@ -64,7 +65,7 @@ export function pageToTicket(page: any): Ticket {
   };
 }
 
-async function queryAll(body: Record<string, unknown>): Promise<any[]> {
+async function queryAll(body: Record<string, unknown>, max = 500): Promise<any[]> {
   const out: any[] = [];
   let cursor: string | undefined;
   do {
@@ -73,7 +74,7 @@ async function queryAll(body: Record<string, unknown>): Promise<any[]> {
     });
     out.push(...page.results);
     cursor = page.has_more ? page.next_cursor : undefined;
-  } while (cursor);
+  } while (cursor && out.length < max);
   return out;
 }
 
@@ -81,86 +82,70 @@ export async function getTicket(pageId: string): Promise<Ticket> {
   return pageToTicket(await notion(`/pages/${pageId}`));
 }
 
-/** 담당자가 나인 미완료 티켓 */
+const activeFilter = () => TICKET_DONE.map((s) => ({ property: "진행 상태", status: { does_not_equal: s } }));
+
+/** 담당자가 나인 활성 티켓 (Step 1) */
 export async function listTicketsAssignedToMe(): Promise<Ticket[]> {
   const rows = await queryAll({
-    filter: {
-      and: [
-        { property: "담당자", people: { contains: config.notion.meUserId } },
-        ...TICKET_DONE.map((s) => ({ property: "진행 상태", status: { does_not_equal: s } })),
-      ],
-    },
-    sorts: [{ property: "작업완료일", direction: "ascending" }],
+    filter: { and: [{ property: "담당자", people: { contains: config.notion.meUserId } }, ...activeFilter()] },
+    sorts: [{ timestamp: "last_edited_time", direction: "descending" }],
   });
   return rows.map(pageToTicket);
 }
 
-/** 여러 티켓의 현재 상태를 한 번에 조회 (실패한 것은 건너뜀) */
+/** 담당자가 내가 아닌 활성 티켓 (댓글 멘션 스캔 대상, 최근 편집순 상한 N건) */
+export async function listActiveTicketsNotMine(limit = config.notion.commentScanLimit): Promise<{ tickets: Ticket[]; total: number }> {
+  const rows = await queryAll({
+    filter: { and: [{ property: "담당자", people: { does_not_contain: config.notion.meUserId } }, ...activeFilter()] },
+    sorts: [{ timestamp: "last_edited_time", direction: "descending" }],
+  }, 1000);
+  return { tickets: rows.slice(0, limit).map(pageToTicket), total: rows.length };
+}
+
+export interface MentionHit { comment: string; author: string; date: string }
+
+/** 페이지의 미해결 댓글에서 나를 멘션한 것 (Step 2). 페이지 단위 댓글만 — 인라인 댓글은 API가 제공하지 않음 */
+export async function findMentionInComments(pageId: string): Promise<MentionHit | null> {
+  try {
+    const data = await notion(`/comments?block_id=${pageId}&page_size=50`);
+    for (const c of [...(data.results ?? [])].reverse()) {
+      const rt: any[] = c.rich_text ?? [];
+      const mentioned = rt.some((r) => r.type === "mention" && r.mention?.user?.id === config.notion.meUserId);
+      if (!mentioned) continue;
+      return {
+        comment: rt.map((r) => r.plain_text ?? "").join("").trim().slice(0, 200),
+        author: c.created_by?.name ?? c.created_by?.id ?? "",
+        date: String(c.created_time ?? "").slice(0, 10),
+      };
+    }
+  } catch { /* 댓글 권한 없음 등 */ }
+  return null;
+}
+
+/** 여러 티켓 상태 한 번에 (실패한 것은 건너뜀) */
 export async function getTicketsStatus(pageIds: string[]): Promise<Map<string, Ticket>> {
   const out = new Map<string, Ticket>();
   await Promise.all(pageIds.map(async (id) => {
-    try { out.set(id, await getTicket(id)); } catch { /* 삭제된 티켓 등 */ }
+    try { const t = await getTicket(id); out.set(t.id, t); } catch { /* 삭제된 티켓 등 */ }
   }));
   return out;
 }
 
-export interface NewTicket {
-  title: string;
-  due?: string | null;
-  priority?: Priority;
-  tags?: string[];
-  assignToMe?: boolean;
-  /** 요청사항 본문 (볼트 메모 등) */
-  request?: string;
-  slackLink?: string;
-}
-
-/**
- * 티켓 발급. 에너빌드작업 DB의 [QA]Title 템플릿과 같은 골격(요청사항/조치내용/조치결과)으로 본문을 만듭니다.
- */
-export async function createTicket(t: NewTicket): Promise<Ticket> {
-  const props: Record<string, unknown> = {
-    작업: { title: [{ text: { content: t.title } }] },
-    "진행 상태": { status: { name: "시작 전" } },
-  };
-  if (t.due) props["작업완료일"] = { date: { start: t.due } };
-  if (t.priority) props["우선순위"] = { select: { name: t.priority } };
-  if (t.tags?.length) props["태그"] = { multi_select: t.tags.map((name) => ({ name })) };
-  if (t.assignToMe !== false) props["담당자"] = { people: [{ id: config.notion.meUserId }] };
-  if (t.slackLink) props["슬랙링크"] = { url: t.slackLink };
-
-  const h2 = (text: string) => ({ object: "block", type: "heading_2", heading_2: { rich_text: [{ text: { content: text } }] } });
-  const h3 = (text: string) => ({ object: "block", type: "heading_3", heading_3: { rich_text: [{ text: { content: text } }] } });
-  const bullet = (text: string) => ({ object: "block", type: "bulleted_list_item", bulleted_list_item: { rich_text: [{ text: { content: text.slice(0, 1900) } }] } });
-  const requestLines = (t.request ?? "").split("\n").map((l) => l.replace(/^[-*]\s*/, "").trim()).filter(Boolean);
-
-  const children = [
-    h2("1. 요청사항"),
-    h3("요청 내용"),
-    ...(requestLines.length ? requestLines.slice(0, 30).map(bullet) : [bullet("text")]),
-    h3("기대 결과"), bullet("text"),
-    h3("수정 요건"), bullet("text"),
-    h2("2. 조치내용"), bullet("-"),
-    h2("3. 조치결과"), bullet("-"),
-  ];
-  const page = await notion("/pages", { method: "POST", body: { parent: { database_id: config.notion.ticketsDbId }, properties: props, children } });
-  return pageToTicket(page);
-}
-
-/** 페이지 코멘트에 내가 멘션되었는지 (웹훅 comment 이벤트 처리용) */
-export async function isMentionedInComments(pageId: string): Promise<boolean> {
+/** 티켓 본문에서 배경·요청 요약 몇 줄 (노트 "배경"·"체크리스트" 힌트용). 전문 복사는 하지 않음 */
+export async function getTicketSummary(pageId: string): Promise<{ background: string[]; checklist: string[] }> {
+  const out = { background: [] as string[], checklist: [] as string[] };
   try {
-    const data = await notion(`/comments?block_id=${pageId}&page_size=20`);
-    return (data.results ?? []).some((c: any) =>
-      (c.rich_text ?? []).some((r: any) => r.type === "mention" && r.mention?.user?.id === config.notion.meUserId));
-  } catch { return false; }
-}
-
-/** Notion 상태 → 볼트 상태 대응 */
-export function ticketToVaultStatus(s: TicketStatus): "할일" | "진행중" | "보류" | "완료" | "취소" {
-  if (s === "완료" || s === "보관") return "완료";
-  if (s === "업무제외") return "취소";
-  if (s === "진행 중" || s === "테스트 중") return "진행중";
-  if (s === "보완검토중") return "보류";
-  return "할일";
+    const data = await notion(`/blocks/${pageId}/children?page_size=100`);
+    let section = "";
+    for (const b of data.results ?? []) {
+      const type: string = b.type;
+      const text: string = (b[type]?.rich_text ?? []).map((r: any) => r.plain_text).join("").trim();
+      if (!text) continue;
+      if (type.startsWith("heading")) { section = text; continue; }
+      if (/^(text|-)$/.test(text)) continue;
+      if (/배경|이슈|Background|Issues/i.test(section) && out.background.length < 3) out.background.push(text.split(" / ")[0]);
+      else if (/요청|수정 요건|Request|Revision/i.test(section) && out.checklist.length < 5) out.checklist.push(text.split(" / ")[0]);
+    }
+  } catch { /* 본문 접근 실패는 무시 */ }
+  return out;
 }

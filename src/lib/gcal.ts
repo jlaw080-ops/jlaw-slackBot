@@ -59,7 +59,7 @@ export interface CalEvent {
   allDay: boolean;
   htmlLink: string;
   location?: string;
-  vaultTaskId?: string;
+  vaultPath?: string;
 }
 
 function toEvent(e: any): CalEvent {
@@ -71,7 +71,7 @@ function toEvent(e: any): CalEvent {
     allDay: Boolean(e.start?.date),
     htmlLink: e.htmlLink,
     location: e.location,
-    vaultTaskId: e.extendedProperties?.private?.vaultTaskId,
+    vaultPath: e.extendedProperties?.private?.vaultPath,
   };
 }
 
@@ -83,16 +83,16 @@ export async function listEvents(timeMin: string, timeMax: string): Promise<CalE
   return (data.items ?? []).map(toEvent);
 }
 
-async function findEventForTask(taskId: string): Promise<CalEvent | null> {
-  const qs = new URLSearchParams({ privateExtendedProperty: `vaultTaskId=${taskId}`, maxResults: "1", showDeleted: "false" });
+async function findEventForTask(path: string): Promise<CalEvent | null> {
+  const qs = new URLSearchParams({ privateExtendedProperty: `vaultPath=${path}`, maxResults: "1", showDeleted: "false" });
   const data = await gcal(`/calendars/${cal()}/events?${qs}`);
   return data.items?.length ? toEvent(data.items[0]) : null;
 }
 
-/** 볼트 할일 → 마감일 종일 일정 생성/갱신, 완료·취소·마감 없음이면 삭제 */
+/** 볼트 할일 → 마감일 종일 일정 생성/갱신, 완료·마감 없음이면 삭제 */
 export async function syncTaskToCalendar(t: VaultTask): Promise<"created" | "updated" | "deleted" | "skipped"> {
-  const existing = await findEventForTask(t.id);
-  const shouldExist = Boolean(t.due) && (t.status === "할일" || t.status === "진행중" || t.status === "보류");
+  const existing = await findEventForTask(t.path);
+  const shouldExist = Boolean(t.due) && t.status !== "done";
   if (!shouldExist) {
     if (existing) { await gcal(`/calendars/${cal()}/events/${existing.id}`, { method: "DELETE" }); return "deleted"; }
     return "skipped";
@@ -101,10 +101,10 @@ export async function syncTaskToCalendar(t: VaultTask): Promise<"created" | "upd
   const endDate = addDays(t.due!, 1);
   const body = {
     summary: `[할일] ${t.title}`,
-    description: `볼트: ${t.path}\n우선순위: ${t.priority || "-"}\n상태: ${t.status}${t.notionTicket ? `\nNotion: ${t.notionTicket}` : ""}`,
+    description: `볼트: ${t.path}\n프로젝트: ${t.project || "-"}\n우선순위: ${t.priority || "-"}\n상태: ${t.status}${t.notionUrl ? `\nNotion: ${t.notionUrl}` : ""}`,
     start: { date: startDate },
     end: { date: endDate },
-    extendedProperties: { private: { vaultTaskId: t.id, source: "jlaw-workhub" } },
+    extendedProperties: { private: { vaultPath: t.path.slice(0, 1000), source: "jlaw-workhub" } },
     transparency: "transparent",
   };
   if (existing) {

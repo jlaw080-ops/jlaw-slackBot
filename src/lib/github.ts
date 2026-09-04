@@ -1,5 +1,5 @@
 /**
- * GitHub Contents API로 Obsidian 볼트 저장소의 파일을 읽고 씁니다.
+ * GitHub API로 Obsidian 볼트 저장소의 파일을 읽고 씁니다.
  *
  * Obsidian은 내 PC의 폴더라서 클라우드(Vercel)가 직접 접근할 수 없습니다.
  * Obsidian "Git" 플러그인으로 볼트를 GitHub에 자동 커밋/푸시·풀 해 두면,
@@ -23,6 +23,7 @@ const enc = (p: string) => p.split("/").map(encodeURIComponent).join("/");
 const ref = () => encodeURIComponent(config.vault.branch);
 
 export interface VaultFile { path: string; sha: string; content: string }
+export interface TreeEntry { path: string; sha: string; type: "blob" | "tree"; size?: number }
 
 /** 파일 읽기. 없으면 null */
 export async function readFile(path: string): Promise<VaultFile | null> {
@@ -30,23 +31,38 @@ export async function readFile(path: string): Promise<VaultFile | null> {
   if (res.status === 404) return null;
   await ensureOk(res, `GitHub 읽기 ${path}`);
   const data = (await res.json()) as any;
+  if (Array.isArray(data)) return null; // 디렉터리
   return { path, sha: data.sha, content: Buffer.from(data.content, "base64").toString("utf8") };
 }
 
-/** 디렉터리의 파일 목록 (파일만). 없으면 빈 배열 */
-export async function listDir(dir: string): Promise<Array<{ path: string; sha: string; name: string }>> {
-  const res = await fetch(`${API}/repos/${config.vault.repo}/contents/${enc(dir)}?ref=${ref()}`, { headers: headers() });
-  if (res.status === 404) return [];
-  await ensureOk(res, `GitHub 목록 ${dir}`);
-  const data = (await res.json()) as any[];
-  return data.filter((f) => f.type === "file").map((f) => ({ path: f.path, sha: f.sha, name: f.name }));
+/** blob SHA로 내용 읽기 (트리 스캔 후 병렬 읽기용) */
+export async function readBlob(path: string, sha: string): Promise<VaultFile> {
+  const res = await fetch(`${API}/repos/${config.vault.repo}/git/blobs/${sha}`, { headers: headers() });
+  await ensureOk(res, `GitHub blob ${path}`);
+  const data = (await res.json()) as any;
+  return { path, sha, content: Buffer.from(data.content, "base64").toString("utf8") };
 }
 
-/** 디렉터리 안의 .md 파일을 모두 읽습니다 (병렬) */
-export async function readDirMarkdown(dir: string): Promise<VaultFile[]> {
-  const files = (await listDir(dir)).filter((f) => f.name.endsWith(".md"));
-  const out = await Promise.all(files.map((f) => readFile(f.path)));
-  return out.filter((f): f is VaultFile => Boolean(f));
+/** 저장소 전체(또는 하위 경로) 트리를 재귀로 한 번에 가져옵니다 — 경로와 SHA만, 내용 없음 */
+export async function listTree(subdir?: string): Promise<TreeEntry[]> {
+  const treeish = subdir ? `${config.vault.branch}:${subdir}` : config.vault.branch;
+  const res = await fetch(`${API}/repos/${config.vault.repo}/git/trees/${encodeURIComponent(treeish)}?recursive=1`, { headers: headers() });
+  if (res.status === 404) return [];
+  await ensureOk(res, `GitHub 트리 ${subdir ?? "/"}`);
+  const data = (await res.json()) as any;
+  const prefix = subdir ? `${subdir}/` : "";
+  return (data.tree ?? []).map((t: any) => ({ path: `${prefix}${t.path}`, sha: t.sha, type: t.type, size: t.size }));
+}
+
+/** 여러 파일을 병렬로 읽습니다 (동시 8개) */
+export async function readMany(entries: Array<{ path: string; sha: string }>): Promise<VaultFile[]> {
+  const out: VaultFile[] = [];
+  for (let i = 0; i < entries.length; i += 8) {
+    const chunk = entries.slice(i, i + 8);
+    const got = await Promise.all(chunk.map((e) => readBlob(e.path, e.sha).catch(() => null)));
+    for (const f of got) if (f) out.push(f);
+  }
+  return out;
 }
 
 /** 파일 생성/덮어쓰기. 내용이 같으면 건너뜁니다. 반환: 변경 여부 */
@@ -68,19 +84,4 @@ export async function writeFile(path: string, content: string, message: string, 
   });
   await ensureOk(res, `GitHub 쓰기 ${path}`);
   return true;
-}
-
-export async function deleteFile(path: string, sha: string, message: string): Promise<void> {
-  const res = await fetch(`${API}/repos/${config.vault.repo}/contents/${enc(path)}`, {
-    method: "DELETE",
-    headers: headers(),
-    body: JSON.stringify({ message, sha, branch: config.vault.branch, committer: COMMITTER }),
-  });
-  await ensureOk(res, `GitHub 삭제 ${path}`);
-}
-
-/** 파일 이동 = 새 위치에 쓰고 옛 파일 삭제 */
-export async function moveFile(from: VaultFile, to: string, content: string, message: string): Promise<void> {
-  await writeFile(to, content, message);
-  await deleteFile(from.path, from.sha, message);
 }

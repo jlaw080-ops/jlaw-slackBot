@@ -1,16 +1,21 @@
-# Obsidian 볼트 템플릿
+# 볼트 보조 파일
 
-이 폴더의 파일들을 볼트에 복사해 쓰세요.
+봇은 기존 볼트 규칙(`06_To Do/YYYY-MM/MMDD_제목.md`, `05_Daily/YYYY-MM-DD.md`)을 그대로 쓰므로 **별도 템플릿이 필요 없습니다.**
+`Vault-Kanban` 앱과 `todo-capture` / `notion-todo-sync` / `notion-qa-ticket` 스킬이 만든 노트를 그대로 읽고 씁니다.
 
 | 파일 | 어디에 | 용도 |
 |---|---|---|
-| `Templates/할일.md` | 볼트 `Templates/` | `WorkHub/Tasks/`에 새 할일을 손으로 만들 때 (핵심 플러그인 "템플릿" 사용) |
-| `WorkHub/대시보드.md` | 볼트 `WorkHub/` | Dataview 플러그인으로 열린 할일·이번 주 마감·티켓 현황을 한눈에 |
+| `06_To Do/_대시보드.md` | 볼트 `06_To Do/` | Dataview로 열린 할일·마감·Notion 티켓 현황 한눈에 (선택) |
 
-## 규칙 요약
-- `WorkHub/Tasks/` 안의 `.md` 파일 하나 = 할일 하나. frontmatter가 없어도 봇이 다음 실행 때 채워 줍니다.
-- `status:`를 `완료`나 `취소`로 바꾸면 봇이 `WorkHub/Archive/YYYY-MM/`으로 옮깁니다.
-- `due:`는 `2026-09-15` 형식. `priority:`는 높음/중간/낮음. `tags:`는 `["리서치", "ZEB"]` 형식.
-- 본문은 자유. 봇은 frontmatter만 갱신하고 본문은 보존합니다.
-- 티켓을 발급하면 `notion_ticket:`에 링크가, `notion_status:`에 Notion 진행 상태가 기록됩니다.
-- `WorkHub/Worklog/날짜.md`의 `## 📝 메모` 아래 줄은 보존되고, 나머지 섹션은 저녁에 봇이 다시 씁니다.
+`_`로 시작하는 파일은 봇이 할일로 읽지 않습니다.
+
+## 봇이 노트에 하는 일 (frontmatter만, 본문은 보존)
+
+| 동작 | 바뀌는 필드 |
+|---|---|
+| `/할일 완료` · ✅ 버튼 | `status: done`, `completed`, `updated` |
+| `/할일 시작` · 🔄 버튼 | `status: in-progress`, `started`, `updated` |
+| `/티켓 발급` · 🎫 버튼 | `notion: pending`, `notion-url:`, `notion-status:` (발급은 notion-qa-ticket 스킬) |
+| `/티켓 상태` · 브리핑 | `notion-status` (Notion 원본 상태), `updated` — `status`는 건드리지 않음 |
+| Notion 후보 📥 등록 | 새 노트 생성 (`notion: assigned`, `notion-url`, `notion-status`, `due`) |
+| 작업일지 | 일일노트 `<!-- WORKHUB-LOG:START/END -->` 블록 안만 |
