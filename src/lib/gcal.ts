@@ -7,7 +7,7 @@
 import { createSign } from "node:crypto";
 import { config } from "./config.js";
 import { ensureOk } from "./http.js";
-import type { Task } from "./notion.js";
+import type { VaultTask } from "./vault.js";
 import { addDays } from "./dates.js";
 
 const SCOPE = "https://www.googleapis.com/auth/calendar";
@@ -24,13 +24,10 @@ async function accessToken(): Promise<string> {
   const sa = JSON.parse(config.google.serviceAccountJson) as { client_email: string; private_key: string };
   const now = Math.floor(Date.now() / 1000);
   const headerPart = b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-  const claimPart = b64url(JSON.stringify({
-    iss: sa.client_email, scope: SCOPE, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600,
-  }));
+  const claimPart = b64url(JSON.stringify({ iss: sa.client_email, scope: SCOPE, aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 }));
   const signer = createSign("RSA-SHA256");
   signer.update(`${headerPart}.${claimPart}`);
   const jwt = `${headerPart}.${claimPart}.${b64url(signer.sign(sa.private_key))}`;
-
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -57,87 +54,70 @@ async function gcal<T = any>(path: string, init: Omit<RequestInit, "body"> & { b
 export interface CalEvent {
   id: string;
   summary: string;
-  start: string; // ISO datetime 또는 date
+  start: string;
   end: string;
   allDay: boolean;
   htmlLink: string;
   location?: string;
-  notionPageId?: string;
+  vaultTaskId?: string;
 }
 
 function toEvent(e: any): CalEvent {
-  const allDay = Boolean(e.start?.date);
   return {
     id: e.id,
     summary: e.summary ?? "(제목 없음)",
     start: e.start?.dateTime ?? e.start?.date,
     end: e.end?.dateTime ?? e.end?.date,
-    allDay,
+    allDay: Boolean(e.start?.date),
     htmlLink: e.htmlLink,
     location: e.location,
-    notionPageId: e.extendedProperties?.private?.notionPageId,
+    vaultTaskId: e.extendedProperties?.private?.vaultTaskId,
   };
 }
 
-/** 기간 내 일정 목록 (반복 일정 펼침, 시간순) */
+const cal = () => encodeURIComponent(config.google.calendarId);
+
 export async function listEvents(timeMin: string, timeMax: string): Promise<CalEvent[]> {
-  const cal = encodeURIComponent(config.google.calendarId);
   const qs = new URLSearchParams({ timeMin, timeMax, singleEvents: "true", orderBy: "startTime", maxResults: "50" });
-  const data = await gcal(`/calendars/${cal}/events?${qs}`);
+  const data = await gcal(`/calendars/${cal()}/events?${qs}`);
   return (data.items ?? []).map(toEvent);
 }
 
-/** Notion 작업 ID로 만든 일정 찾기 (privateExtendedProperty 검색) */
 async function findEventForTask(taskId: string): Promise<CalEvent | null> {
-  const cal = encodeURIComponent(config.google.calendarId);
-  const qs = new URLSearchParams({ privateExtendedProperty: `notionPageId=${taskId}`, maxResults: "1", showDeleted: "false" });
-  const data = await gcal(`/calendars/${cal}/events?${qs}`);
+  const qs = new URLSearchParams({ privateExtendedProperty: `vaultTaskId=${taskId}`, maxResults: "1", showDeleted: "false" });
+  const data = await gcal(`/calendars/${cal()}/events?${qs}`);
   return data.items?.length ? toEvent(data.items[0]) : null;
 }
 
-/**
- * Notion 작업 → 캘린더 종일 일정 생성/갱신.
- * 이미 있으면 제목/날짜만 갱신, 완료·보관이면 삭제.
- * 반환값: "created" | "updated" | "deleted" | "skipped"
- */
-export async function syncTaskToCalendar(t: Task): Promise<"created" | "updated" | "deleted" | "skipped"> {
-  const cal = encodeURIComponent(config.google.calendarId);
+/** 볼트 할일 → 마감일 종일 일정 생성/갱신, 완료·취소·마감 없음이면 삭제 */
+export async function syncTaskToCalendar(t: VaultTask): Promise<"created" | "updated" | "deleted" | "skipped"> {
   const existing = await findEventForTask(t.id);
-  const shouldExist = Boolean(t.due) && t.status !== "완료" && t.status !== "보관" && t.status !== "업무제외";
-
+  const shouldExist = Boolean(t.due) && (t.status === "할일" || t.status === "진행중" || t.status === "보류");
   if (!shouldExist) {
-    if (existing) {
-      await gcal(`/calendars/${cal}/events/${existing.id}`, { method: "DELETE" });
-      return "deleted";
-    }
+    if (existing) { await gcal(`/calendars/${cal()}/events/${existing.id}`, { method: "DELETE" }); return "deleted"; }
     return "skipped";
   }
-
   const startDate = t.due!;
-  const endDate = addDays(t.dueEnd ?? t.due!, 1); // 종일 일정의 end는 배타적(다음날)
+  const endDate = addDays(t.due!, 1);
   const body = {
     summary: `[할일] ${t.title}`,
-    description: `Notion: ${t.url}\n우선순위: ${t.priority || "-"}\n상태: ${t.status || "-"}`,
+    description: `볼트: ${t.path}\n우선순위: ${t.priority || "-"}\n상태: ${t.status}${t.notionTicket ? `\nNotion: ${t.notionTicket}` : ""}`,
     start: { date: startDate },
     end: { date: endDate },
-    extendedProperties: { private: { notionPageId: t.id, source: "jlaw-workhub" } },
+    extendedProperties: { private: { vaultTaskId: t.id, source: "jlaw-workhub" } },
     transparency: "transparent",
   };
   if (existing) {
-    const same = existing.summary === body.summary && existing.start === startDate && existing.end === endDate;
-    if (same) return "skipped";
-    await gcal(`/calendars/${cal}/events/${existing.id}`, { method: "PATCH", body });
+    if (existing.summary === body.summary && existing.start === startDate && existing.end === endDate) return "skipped";
+    await gcal(`/calendars/${cal()}/events/${existing.id}`, { method: "PATCH", body });
     return "updated";
   }
-  await gcal(`/calendars/${cal}/events`, { method: "POST", body });
+  await gcal(`/calendars/${cal()}/events`, { method: "POST", body });
   return "created";
 }
 
-/** Slack에서 직접 만든 일정 (시간 지정) */
-export async function createTimedEvent(input: {
-  summary: string; date: string; startTime?: string; endTime?: string; description?: string;
-}): Promise<CalEvent> {
-  const cal = encodeURIComponent(config.google.calendarId);
+/** Slack에서 직접 만든 일정 */
+export async function createTimedEvent(input: { summary: string; date: string; startTime?: string; endTime?: string; description?: string }): Promise<CalEvent> {
   const body: any = { summary: input.summary, description: input.description };
   if (input.startTime) {
     const end = input.endTime ?? plusOneHour(input.startTime);
@@ -147,7 +127,7 @@ export async function createTimedEvent(input: {
     body.start = { date: input.date };
     body.end = { date: addDays(input.date, 1) };
   }
-  return toEvent(await gcal(`/calendars/${cal}/events`, { method: "POST", body }));
+  return toEvent(await gcal(`/calendars/${cal()}/events`, { method: "POST", body }));
 }
 
 function plusOneHour(hhmm: string): string {

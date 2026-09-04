@@ -1,7 +1,11 @@
 /**
  * 환경변수 설정 모음.
- * - 비밀값(토큰)은 반드시 Vercel 환경변수에 넣습니다. (.env.example 참고)
- * - ID 값(Notion DB, Slack 채널)은 현재 워크스페이스 기준 기본값을 넣어 두었습니다.
+ *
+ * 역할 분담
+ *  - Obsidian 볼트(GitHub 저장소) = 창고(원본). 할일·작업일지가 여기 마크다운으로 저장됩니다.  [필수]
+ *  - Slack = 조작 화면(명령·알림)                                                        [필수]
+ *  - Google Calendar = 일정                                                              [선택]
+ *  - Notion = 에너빌드 스프린트 보드. 티켓 발급 / 나에게 할당된 티켓 가져오기 / 상태 확인만  [선택]
  */
 function req(name: string): string {
   const v = process.env[name];
@@ -15,14 +19,17 @@ function opt(name: string, fallback = ""): string {
 export const config = {
   timezone: "Asia/Seoul",
 
-  notion: {
-    get token() { return req("NOTION_TOKEN"); },
-    tasksDbId: opt("NOTION_TASKS_DB_ID", "4abb47d5588f43fd83e83fe943082cd8"),
-    worklogDbId: opt("NOTION_WORKLOG_DB_ID", "15ffa6101c6944249a6ca7394ecb5b02"),
-    /** 내 Notion 사용자 ID (담당자 필터/자동 지정에 사용) */
-    meUserId: opt("NOTION_ME_USER_ID", "63428ed9-eebd-4bcc-9d76-cb550c3e528d"),
-    /** Notion 자동화 웹훅 검증용 공유 비밀값 (선택) */
-    webhookSecret: opt("NOTION_WEBHOOK_SECRET"),
+  /** 창고: Obsidian 볼트가 올라간 GitHub 저장소 */
+  vault: {
+    get repo() { return req("VAULT_REPO"); },          // 예: jlaw080-ops/obsidian-vault
+    branch: opt("VAULT_BRANCH", "main"),
+    get token() { return req("GITHUB_TOKEN"); },       // Contents: Read and write 권한
+    root: opt("VAULT_ROOT", "WorkHub"),                 // 볼트 안에서 봇이 관리하는 최상위 폴더
+    get tasksDir() { return `${this.root}/Tasks`; },     // 열린 할일
+    get archiveDir() { return `${this.root}/Archive`; }, // 완료된 할일 (YYYY-MM 하위 폴더)
+    get worklogDir() { return `${this.root}/Worklog`; }, // 날짜별 작업일지
+    /** Obsidian URI를 만들 때 쓰는 볼트 이름 (Obsidian에서 열기 링크). 비우면 링크 생략 */
+    obsidianVaultName: opt("OBSIDIAN_VAULT_NAME"),
   },
 
   slack: {
@@ -30,28 +37,23 @@ export const config = {
     get signingSecret() { return req("SLACK_SIGNING_SECRET"); },
     channelTodo: opt("SLACK_CHANNEL_TODO", "C0BUFBDQKM5"),      // #할일
     channelWorklog: opt("SLACK_CHANNEL_WORKLOG", "C0BUYKMLCLR"), // #작업일지
-    channelWork: opt("SLACK_CHANNEL_WORK", "C0BU86WLRGC"),       // #업무
-    /** 업무 할당 알림을 DM으로 받을 내 Slack 사용자 ID (예: U0XXXXXXX). 비우면 #업무 채널로만 알림 */
+    channelWork: opt("SLACK_CHANNEL_WORK", "C0BU86WLRGC"),       // #업무 (Notion 티켓 알림)
+    /** 할당 알림을 DM으로도 받을 내 Slack 사용자 ID (예: U0XXXXXXX). 비우면 채널로만 */
     meUserId: opt("SLACK_ME_USER_ID"),
   },
 
+  notion: {
+    token: opt("NOTION_TOKEN"),
+    ticketsDbId: opt("NOTION_TICKETS_DB_ID", "4abb47d5588f43fd83e83fe943082cd8"), // 에너빌드작업
+    meUserId: opt("NOTION_ME_USER_ID", "63428ed9-eebd-4bcc-9d76-cb550c3e528d"),
+    webhookSecret: opt("NOTION_WEBHOOK_SECRET"),
+    get enabled() { return Boolean(this.token); },
+  },
+
   google: {
-    /** 서비스 계정 JSON 전체를 문자열로 넣습니다 (비우면 캘린더 기능 비활성) */
     serviceAccountJson: opt("GOOGLE_SERVICE_ACCOUNT_JSON"),
     calendarId: opt("GOOGLE_CALENDAR_ID", "jlaw080@gmail.com"),
     get enabled() { return Boolean(this.serviceAccountJson); },
-  },
-
-  obsidian: {
-    /** Obsidian 볼트를 올려 둔 GitHub 저장소 (예: jlaw080-ops/obsidian-vault). 비우면 Obsidian 동기화 비활성 */
-    repo: opt("OBSIDIAN_REPO"),
-    branch: opt("OBSIDIAN_BRANCH", "main"),
-    get token() { return opt("GITHUB_TOKEN"); },
-    /** 볼트 안에서 봇이 관리하는 폴더 */
-    tasksDir: opt("OBSIDIAN_TASKS_DIR", "WorkHub/Tasks"),
-    worklogDir: opt("OBSIDIAN_WORKLOG_DIR", "WorkHub/Worklog"),
-    inboxDir: opt("OBSIDIAN_INBOX_DIR", "WorkHub/Inbox"),
-    get enabled() { return Boolean(this.repo && this.token); },
   },
 
   /** Vercel Cron 및 수동 호출 보호용 비밀값 */
