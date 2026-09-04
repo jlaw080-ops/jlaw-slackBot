@@ -88,6 +88,9 @@ export function parseCommand(command: string, text: string, today = todayKST()):
   // 줄바꿈을 살린 나머지 (작업일지 노트 본문용)
   const restRaw = first ? raw.slice(raw.indexOf(first) + first.length).replace(/^[ \t]+/, "") : "";
   const isHelp = !raw || sub === "도움말" || sub === "help";
+  // 어느 명령에서든 `도움말 전체`(또는 `전체`)로 전체 사용법을 봅니다
+  if (isHelp && /^(전체|모두|all|목록|list)/.test(rest)) return { kind: "help", command: "전체" };
+  if (["전체사용법", "사용법", "명령어", "commands"].includes(sub)) return { kind: "help", command: "전체" };
 
   if (kind === "할일") {
     if (isHelp) return { kind: "help", command: "할일" };
@@ -190,6 +193,33 @@ export const HELP: Record<string, string> = {
     "• `/일정` · `/일정 내일` · `/일정 주간`",
     "• `/일정 추가 제목 | 날짜 | 시작 | 종료` — 예) `/일정 추가 설계협의 | 내일 | 14:00 | 15:30`",
   ].join("\n"),
+  전체: [
+    "*📖 WorkHub 전체 사용법* — 창고는 Obsidian 볼트, 리모컨은 Slack",
+    "",
+    "*📋 /할일* — 볼트 `06_To Do/YYYY-MM/`",
+    "• `/할일 추가 제목 | 마감 | 우선순위 | 프로젝트` (뒤 3개는 생략 가능)",
+    "• `/할일 목록 [전체|오늘|주간]` · `/할일 보내기 [할일|작업일지] [범위]`",
+    "• `/할일 완료|시작|검토|보류 키워드` · `/할일 브리핑`",
+    "",
+    "*📓 /작업일지* — 일일노트 `05_Daily/` + 프로젝트 노트 `01_Projects/…/01_진행업무/`",
+    "• `/작업일지 한 줄 메모` — 일일노트에 시각과 함께 기록",
+    "• `/작업일지 노트` — 입력 창(제목·내용·프로젝트) → 프로젝트 폴더에 노트",
+    "• `/작업일지 노트 제목 :: 내용` — 한 줄로 빠르게",
+    "• `/작업일지 생성` — 오늘 완료·진행·일정·메모 정리해 #작업일지에 게시",
+    "",
+    "*📅 /일정* — Google Calendar",
+    "• `/일정` · `/일정 내일` · `/일정 주간` · `/일정 추가 제목 | 날짜 | 시작 | 종료`",
+    "",
+    "*🎫 /티켓* — Notion 에너빌드작업 보드 (읽기 전용)",
+    "• `/티켓 할당` · `/티켓 상태` · `/티켓 발급 키워드`",
+    "",
+    "*🖱 메시지 `⋯` 메뉴* — 이미 쓴 글을 옮길 때",
+    "• *작업일지로 보내기* → #작업일지 + 일일노트 메모   • *프로젝트 노트로 저장* → 진행업무 노트",
+    "",
+    "*⏰ 자동*  08:00 아침 브리핑(#할일) · 18:00 작업일지 정리(#작업일지)",
+    "",
+    "_각 명령의 자세한 설명은 `/할일`, `/작업일지`, `/일정`, `/티켓` 을 그냥 쳐 보세요._",
+  ].join("\n"),
   티켓: [
     "*🎫 /티켓 — Notion 에너빌드작업 보드 (봇은 읽기만, 발급은 notion-qa-ticket 스킬)*",
     "• `/티켓 발급 키워드` — 노트에 `notion: pending` 표시 → Claude Code에서 \"노션 티켓 발급\" 하면 스킬이 pending 노트를 발급",
@@ -240,8 +270,11 @@ export async function pickTasks(scope: ListScope, today = todayKST()): Promise<{
 export async function executeCommand(p: Parsed, ctx: CommandContext): Promise<CommandReply> {
   const today = todayKST();
   switch (p.kind) {
-    case "help":
-      return { text: HELP[p.command] ?? HELP.할일 };
+    case "help": {
+      const body = HELP[p.command] ?? HELP.할일;
+      if (p.command === "전체") return { text: body };
+      return { text: `${body}\n\n_다른 명령: \`/할일\` \`/작업일지\` \`/일정\` \`/티켓\` · 전체 사용법은 \`/${p.command} 도움말 전체\`_` };
+    }
 
     case "todo.add":
       return addTask(p, ctx);
