@@ -165,3 +165,18 @@ describe("한 줄 입력 (Slack 슬래시 명령은 여러 줄을 받지 못한�
     });
   });
 });
+
+describe("전체 도움말", () => {
+  it("어느 명령에서든 `도움말 전체`로 전체 사용법을 본다", async () => {
+    for (const c of ["/할일", "/작업일지", "/일정", "/티켓"]) {
+      expect(parseCommand(c, "도움말 전체")).toEqual({ kind: "help", command: "전체" });
+    }
+    const r = await executeCommand({ kind: "help", command: "전체" }, { userId: "U1", channelId: "C1" });
+    for (const c of ["/할일", "/작업일지", "/일정", "/티켓"]) expect(r.text).toContain(c);
+  });
+
+  it("개별 도움말에는 다른 명령 안내가 붙는다", async () => {
+    const r = await executeCommand({ kind: "help", command: "할일" }, { userId: "U1", channelId: "C1" });
+    expect(r.text).toContain("전체 사용법");
+  });
+});
