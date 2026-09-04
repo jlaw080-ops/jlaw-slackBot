@@ -165,4 +165,9 @@ Claude Code에서 "노션 티켓 발급" 이라고 하면 `notion-qa-ticket` 스
 - **invalid signature** → `SLACK_SIGNING_SECRET` 불일치.
 - **Notion object_not_found** → 통합을 "프로젝트와 작업" 페이지에 연결하지 않음.
 - **Google 403** → 캘린더를 서비스 계정 이메일과 공유하지 않음.
+- **먼저 진단 주소를 여세요**: `배포주소/api/health?secret=CRON_SECRET값`
+  환경변수 5개가 다 들어갔는지, 봇 토큰이 어느 워크스페이스 것인지, 볼트의 `06_To Do` 폴더가 보이는지를 한 화면에 보여 줍니다.
+- **Slack 명령이 "앱이 반응하지 않아 실패했습니다"** → 서명 검증 실패입니다. 이제 봇이 Slack 화면에 이유를 직접 알려 줍니다.
+  가장 흔한 원인은 **Slack 앱이 여러 개**일 때 명령이 등록된 앱과 다른 앱의 Signing Secret을 넣은 경우입니다.
+  `/api/health` 의 `SLACK_SIGNING_SECRET` 길이·앞 세 글자를 Slack 앱 화면의 값과 대조하세요.
 - 수동 실행 주소 (`?secret=CRON_SECRET` 필요): `배포주소/api/cron/daily-brief`, `배포주소/api/cron/worklog&date=…`, `배포주소/api/notion/pull`

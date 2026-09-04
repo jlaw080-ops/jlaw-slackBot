@@ -45,15 +45,41 @@ export async function respondToCommand(responseUrl: string, text: string, blocks
   await ensureOk(res, "Slack response_url");
 }
 
-/** Slack 요청 서명 검증 */
-export function verifySlackRequest(req: VercelRequest, rawBody: string): boolean {
+export type VerifyReason = "ok" | "서명키 미설정" | "서명 헤더 없음" | "시각 불일치" | "본문 비어 있음" | "서명 불일치";
+
+/**
+ * Slack 요청 서명 검증.
+ * 실패해도 이유를 돌려주어 Slack 화면에 무엇이 잘못됐는지 보여줄 수 있게 합니다.
+ * (검증 실패 시 명령은 실행하지 않습니다 — 이유만 알려 줍니다.)
+ */
+export function verifySlackRequest(req: VercelRequest, rawBody: string): { ok: boolean; reason: VerifyReason } {
+  let secret: string;
+  try {
+    secret = config.slack.signingSecret;
+  } catch {
+    return { ok: false, reason: "서명키 미설정" };
+  }
   const ts = String(req.headers["x-slack-request-timestamp"] ?? "");
   const sig = String(req.headers["x-slack-signature"] ?? "");
-  if (!ts || !sig) return false;
-  if (Math.abs(Date.now() / 1000 - Number(ts)) > 60 * 5) return false;
-  const expected = `v0=${createHmac("sha256", config.slack.signingSecret).update(`v0:${ts}:${rawBody}`).digest("hex")}`;
+  if (!ts || !sig) return { ok: false, reason: "서명 헤더 없음" };
+  if (Math.abs(Date.now() / 1000 - Number(ts)) > 60 * 5) return { ok: false, reason: "시각 불일치" };
+  if (!rawBody) return { ok: false, reason: "본문 비어 있음" };
+  const expected = `v0=${createHmac("sha256", secret).update(`v0:${ts}:${rawBody}`).digest("hex")}`;
   const a = Buffer.from(expected), b = Buffer.from(sig);
-  return a.length === b.length && timingSafeEqual(a, b);
+  const ok = a.length === b.length && timingSafeEqual(a, b);
+  return ok ? { ok: true, reason: "ok" } : { ok: false, reason: "서명 불일치" };
+}
+
+/** 서명 검증 실패를 Slack 화면에 그대로 보여 줍니다 (원인 파악용) */
+export function verifyFailureMessage(reason: VerifyReason, bodySource: string): string {
+  const guide: Record<string, string> = {
+    "서명키 미설정": "Vercel 환경변수에 `SLACK_SIGNING_SECRET` 이 없습니다. 넣고 Redeploy 하세요.",
+    "서명 헤더 없음": "Slack이 보낸 요청이 아닙니다.",
+    "시각 불일치": "서버 시계와 Slack의 시각 차이가 5분을 넘습니다.",
+    "본문 비어 있음": "요청 본문을 읽지 못했습니다. Vercel 런타임 문제일 수 있습니다.",
+    "서명 불일치": "Vercel의 `SLACK_SIGNING_SECRET` 이 **이 앱**의 Signing Secret과 다릅니다. Slack 앱이 여러 개면 명령이 등록된 앱의 값을 써야 합니다. 값을 고친 뒤 반드시 Redeploy 하세요.",
+  };
+  return `⚠️ Slack 서명 검증 실패 — *${reason}*\n${guide[reason] ?? ""}\n\n_진단: 본문 획득 방식 ${bodySource}_`;
 }
 
 // ---------- 블록 빌더 ----------

@@ -29,8 +29,12 @@ async function reply(responseUrl: string, text: string, blocks?: unknown[], inCh
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") return res.status(405).send("method not allowed");
-  const raw = await readRawBody(req);
-  if (!verifySlackRequest(req, raw)) return res.status(401).send("invalid signature");
+  const { raw, source } = await readRawBody(req);
+  const check = verifySlackRequest(req, raw);
+  if (!check.ok) {
+    console.error("Slack 서명 검증 실패", { reason: check.reason, bodySource: source, bodyLength: raw.length });
+    return res.status(401).send(`invalid signature: ${check.reason}`);
+  }
 
   const payload = JSON.parse(parseForm(raw).payload ?? "{}");
   if (payload.type !== "block_actions") return res.status(200).send("");
