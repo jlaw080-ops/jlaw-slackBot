@@ -66,7 +66,10 @@ export const config = {
   },
 
   /** Vercel Cron 및 수동 호출 보호용 비밀값 */
-  /** 전체 구조 문서를 올려 둔 공개 웹페이지 주소 (있으면 Slack 도움말에 링크로 붙습니다) */
-  get docUrl() { return opt("DOC_URL"); },
+  /**
+   * 전체 구조 문서를 올려 둔 공개 웹페이지. Slack 도움말 아래에 링크로 붙습니다.
+   * 주소가 바뀌면 환경변수 DOC_URL 로 덮어쓸 수 있습니다. (한글 경로는 퍼센트 인코딩)
+   */
+  get docUrl() { return opt("DOC_URL", "https://paperflow-k31v.vercel.app/view/workhub%EC%A0%84%EC%B2%B4%EA%B5%AC%EC%A1%B0-1788581366334"); },
   get cronSecret() { return opt("CRON_SECRET"); },
 };
