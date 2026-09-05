@@ -66,5 +66,7 @@ export const config = {
   },
 
   /** Vercel Cron 및 수동 호출 보호용 비밀값 */
+  /** 전체 구조 문서를 올려 둔 공개 웹페이지 주소 (있으면 Slack 도움말에 링크로 붙습니다) */
+  get docUrl() { return opt("DOC_URL"); },
   get cronSecret() { return opt("CRON_SECRET"); },
 };
