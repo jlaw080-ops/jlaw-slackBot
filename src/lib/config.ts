@@ -27,6 +27,8 @@ export const config = {
     get token() { return req("GITHUB_TOKEN"); },       // Contents: Read and write 권한
     /** 할일 노트 폴더 (todo-capture 정본: 06_To Do/YYYY-MM/MMDD_제목.md) */
     todoDir: opt("VAULT_TODO_DIR", "06_To Do"),
+    /** 할일 폴더 안에서 무시할 하위 폴더 이름 (쉼표 구분). 아카이브 이름이 특이할 때만 씁니다 */
+    get todoExclude() { return opt("VAULT_TODO_EXCLUDE", "").split(",").map((s) => s.trim()).filter(Boolean); },
     /** 일일노트 폴더 (05_Daily/YYYY-MM-DD.md 또는 05_Daily/YYYY-MM/YYYY-MM-DD.md) */
     dailyDir: opt("VAULT_DAILY_DIR", "05_Daily"),
     /** 프로젝트 폴더 (notion-qa-ticket이 만든 진행업무 노트의 notion-url 중복 검사용) */

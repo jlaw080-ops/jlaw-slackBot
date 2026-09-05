@@ -180,3 +180,21 @@ describe("전체 도움말", () => {
     expect(r.text).toContain("전체 사용법");
   });
 });
+
+describe("아카이브 폴더 제외", () => {
+  it("아카이브·보관·완료 폴더의 노트는 목록에 넣지 않는다", async () => {
+    const { isExcludedPath } = await import("../lib/vault.js");
+    for (const p of [
+      "06_To Do/아카이브/0801_끝난건.md",
+      "06_To Do/99_아카이브(완료 및 범위 외)/0801_끝난건.md",
+      "06_To Do/Archive/x.md",
+      "06_To Do/보관함/x.md",
+      "06_To Do/2026-09/완료/x.md",
+      "06_To Do/_임시/x.md",
+    ]) expect(isExcludedPath(p)).toBe(true);
+
+    for (const p of ["06_To Do/2026-09/0904_계산서 검토.md", "06_To Do/5월/0501_건.md", "06_To Do/x.md"]) {
+      expect(isExcludedPath(p)).toBe(false);
+    }
+  });
+});

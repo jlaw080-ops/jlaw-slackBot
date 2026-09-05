@@ -183,10 +183,30 @@ export function obsidianUri(path: string): string | null {
 }
 
 // ---------- 조회 ----------
-/** 06_To Do 아래 모든 노트 (하위 폴더 포함). 파싱만 하고 파일은 건드리지 않습니다 */
+/**
+ * 제외할 폴더 이름 — 아카이브(완료·범위 외)처럼 더 이상 보지 않을 노트가 들어 있는 곳.
+ * 볼트마다 이름이 다를 수 있어 환경변수 VAULT_TODO_EXCLUDE(쉼표 구분)로 덧붙일 수 있습니다.
+ */
+const EXCLUDE_WORDS = /^(archived?|archives|아카이브|보관(함|소)?|완료|종료|제외|범위\s*외|backup|old|template|템플릿)/i;
+
+/** 아카이브 등 제외 폴더 안의 노트인가 (`99_아카이브(완료 및 범위 외)` 처럼 뒤에 설명이 붙어도 걸립니다) */
+export function isExcludedPath(path: string): boolean {
+  const extra = config.vault.todoExclude.map((n) => n.toLowerCase());
+  const dirs = path.split("/").slice(0, -1); // 파일 이름은 보지 않는다
+  return dirs.some((raw) => {
+    const seg = raw.trim();
+    if (!seg) return false;
+    if (extra.includes(seg.toLowerCase())) return true;
+    if (seg.startsWith("_")) return true;                    // _임시 처럼 밑줄로 시작하는 폴더
+    const name = seg.replace(/^\d+[_\-. ]*/, "");            // 99_아카이브 → 아카이브
+    return EXCLUDE_WORDS.test(name) || /아카이브|archive/i.test(name);
+  });
+}
+
+/** 06_To Do 아래 모든 노트 (아카이브 폴더 제외). 파싱만 하고 파일은 건드리지 않습니다 */
 export async function listAllTodoNotes(): Promise<VaultTask[]> {
   const tree = await gh.listTree(config.vault.todoDir);
-  const mds = tree.filter((t) => t.type === "blob" && t.path.endsWith(".md") && !t.path.includes("/_"));
+  const mds = tree.filter((t) => t.type === "blob" && t.path.endsWith(".md") && !isExcludedPath(t.path));
   const files = await gh.readMany(mds);
   return files.map(fileToTask);
 }
