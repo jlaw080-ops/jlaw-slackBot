@@ -271,7 +271,8 @@ export async function executeCommand(p: Parsed, ctx: CommandContext): Promise<Co
   const today = todayKST();
   switch (p.kind) {
     case "help": {
-      const body = HELP[p.command] ?? HELP.할일;
+      const doc = config.docUrl ? `\n\n📖 <${config.docUrl}|전체 구조 문서> — 무엇이 어디에 저장되는지` : "";
+      const body = (HELP[p.command] ?? HELP.할일) + doc;
       if (p.command === "전체") return { text: body };
       return { text: `${body}\n\n_다른 명령: \`/할일\` \`/작업일지\` \`/일정\` \`/티켓\` · 전체 사용법은 \`/${p.command} 도움말 전체\`_` };
     }
