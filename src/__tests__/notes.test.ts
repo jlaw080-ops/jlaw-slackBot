@@ -382,3 +382,65 @@ describe("지난 날짜 표현", () => {
     expect(parseDateInput("+3", "2026-09-07")).toBe("2026-09-10"); // 기존 동작 유지
   });
 });
+
+describe("업무 진행 현황", () => {
+  beforeEach(() => {
+    files.set(`${ENERBUILD}/03_에너지분석/01_진행업무/0901_계산서 검토/0901_계산서 검토.md`,
+      "---\nproject: 에너빌드\nsub_project: 에너지분석\npriority: high\nstatus: in-progress\nworks-url: https://works.do/abc\ndue: 2026-09-05\n---\n\n" +
+      "# 계산서 검토\n\n## 진행\n\n- 2026-08-25\n\t- 옛날 기록\n- 2026-09-01 10:30\n\t- 1안 확인\n\t- 장비일람표 반영 필요\n");
+    files.set(`${ENERBUILD}/03_에너지분석/01_진행업무/0820_끝난건/0820_끝난건.md`,
+      "---\nproject: 에너빌드\nstatus: done\n---\n\n# 끝난건\n\n## 진행\n\n- 2026-08-20\n\t- 마무리\n");
+    files.set("06_To Do/2026-09/0906_RTU 점검.md",
+      "---\nproject: 분산자원통합운영플랫폼\nstatus: planned\npriority: mid\ncreated: 2026-09-06\n---\n\n## 업무 개요\n- RTU 통신 점검\n");
+    files.set("06_To Do/아카이브/0801_옛것.md", "---\nproject: 에너빌드\nstatus: planned\ncreated: 2026-08-01\n---\n\n## 업무 개요\n- 아카이브\n");
+  });
+
+  it("열린 업무만 모으고 완료·아카이브는 뺀다", async () => {
+    const { collectBoard } = await import("../lib/board.js");
+    const titles = (await collectBoard("2026-09-07")).map((i) => i.title);
+    expect(titles).toContain("계산서 검토");
+    expect(titles).toContain("RTU 점검");
+    expect(titles).not.toContain("끝난건");
+    expect(titles).not.toContain("옛것");
+  });
+
+  it("마지막 진행 날짜와 그날 내용을 쓴다", async () => {
+    const { collectBoard, idleDays } = await import("../lib/board.js");
+    const it = (await collectBoard("2026-09-07")).find((i) => i.title === "계산서 검토")!;
+    expect(it.lastActive).toBe("2026-09-01");
+    expect(it.recent).toEqual(["1안 확인", "장비일람표 반영 필요"]);
+    expect(idleDays("2026-09-01", "2026-09-07")).toBe(6);
+    expect(it.links).toContainEqual({ label: "웍스", url: "https://works.do/abc" });
+  });
+
+  it("진행 중이 먼저 오도록 정렬한다", async () => {
+    const { collectBoard } = await import("../lib/board.js");
+    const items = await collectBoard("2026-09-07");
+    expect(items[0].status).toBe("in-progress");
+  });
+
+  it("화면에 프로젝트·통계·지연이 들어간다", async () => {
+    const { collectBoard, renderBoard } = await import("../lib/board.js");
+    const html = renderBoard(await collectBoard("2026-09-07"), "2026-09-07");
+    expect(html).toContain("업무 진행 현황");
+    expect(html).toContain("에너빌드");
+    expect(html).toContain("분산자원통합운영플랫폼");
+    expect(html).toContain("마감 2026-09-05 지남");
+    expect(html).toContain("noindex");
+  });
+
+  it("`/작업일지 현황` 은 요약 카드를 돌려준다", async () => {
+    const r = await executeCommand({ kind: "worklog.board" }, { userId: "U1", channelId: "C1" });
+    expect(r.text).toContain("업무 진행 현황");
+    expect(JSON.stringify(r.blocks)).toContain("에너빌드");
+  });
+});
+
+describe("서브 프로젝트 묶음", () => {
+  it("`(프로젝트명)` 꼬리를 떼어 같은 묶음으로 본다", async () => {
+    const { subLabel } = await import("../lib/board.js");
+    expect(subLabel("에너지분석(에너빌드)", "에너빌드")).toBe("에너지분석");
+    expect(subLabel("에너지분석", "에너빌드")).toBe("에너지분석");
+    expect(subLabel("", "에너빌드")).toBe("");
+  });
+});

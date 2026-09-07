@@ -24,6 +24,7 @@ import { candidateCard, context, header, mailCard, postMessage, projectPicker, s
 import { resolveWorkDir, writeWorklogNote } from "./notes.js";
 import { getMail, mailToNoteLines, searchMails, type Mail } from "./gmail.js";
 import { collectReport, renderReport, writeReportBlock } from "./report.js";
+import { collectBoard, idleDays } from "./board.js";
 import { runDailyBrief, eventLine } from "./brief.js";
 import { runWorklog } from "./worklog.js";
 import { findAssignedCandidates, markPending, refreshTicketStatus } from "./notion-sync.js";
@@ -45,6 +46,7 @@ export type Parsed =
   | { kind: "worklog.modal"; title: string }
   | { kind: "worklog.mail"; query: string; project?: string; sub?: string }
   | { kind: "worklog.report"; date: string }
+  | { kind: "worklog.board" }
   | { kind: "todo.push"; target: "할일" | "작업일지"; scope: ListScope }
   | { kind: "worklog.generate" }
   | { kind: "schedule.list"; days: number; from: string }
@@ -196,6 +198,7 @@ export function parseCommand(command: string, text: string, today = todayKST()):
   if (kind === "작업일지") {
     if (isHelp) return { kind: "help", command: "작업일지" };
     if (["생성", "generate", "마감", "정리"].includes(sub)) return { kind: "worklog.generate" };
+    if (["현황", "진행현황", "board", "대시보드", "status"].includes(sub)) return { kind: "worklog.board" };
     if (["일일보고", "보고", "report", "일보"].includes(sub)) {
       const when = rest.trim();
       const date = when ? (parseDateInput(when, today) ?? today) : today;
@@ -274,6 +277,8 @@ export const HELP: Record<string, string> = {
     "*📋 일일보고 초안*",
     "• `/작업일지 일일보고` — 오늘 움직인 할일·진행업무 노트·메모를 모아 팀 공유 양식으로 엮어 줍니다 (`/작업일지 일일보고 어제` 도 가능)",
     "   초안은 일일노트 아래 별도 블록에 넣습니다. 문장을 다듬어 위로 옮기시면 됩니다",
+    "*📊 업무별 진행 현황*",
+    "• `/작업일지 현황` — 프로젝트별로 무엇이 어디까지 왔는지, 며칠째 멈춰 있는지 한 화면으로",
     "*📧 메일을 노트로*",
     "• `/작업일지 메일 검색어` — Gmail에서 찾아 그 메일을 프로젝트 진행업무 노트로 저장합니다 (여러 건이면 골라서)",
     "• 프로젝트를 직접 정하려면 `/작업일지 메일 검색어 | 에너빌드 | 에너지분석`",
@@ -448,6 +453,35 @@ export async function executeCommand(p: Parsed, ctx: CommandContext): Promise<Co
       if (picked.length > 12) blocks.push(context(`…외 ${picked.length - 12}건`));
       await postMessage(channel, `${title} ${picked.length}건`, blocks);
       return { text: `📤 <#${channel}>에 ${title} ${picked.length}건을 올렸어요.` };
+    }
+
+    case "worklog.board": {
+      const items = await collectBoard(today);
+      const going = items.filter((i) => i.status === "in-progress");
+      const late = items.filter((i) => i.due && i.due < today);
+      const stale = items.filter((i) => (idleDays(i.lastActive, today) ?? 0) >= 7);
+      const url = config.baseUrl && config.cronSecret
+        ? `${config.baseUrl}/api/board?secret=${encodeURIComponent(config.cronSecret)}`
+        : "";
+      const byProject = new Map<string, number>();
+      for (const i of items) byProject.set(i.project || "(없음)", (byProject.get(i.project || "(없음)") ?? 0) + 1);
+
+      const blocks: unknown[] = [
+        header(`📊 업무 진행 현황 (${items.length})`),
+        section([
+          `*진행 중* ${going.length} · *마감 지남* ${late.length} · *7일 이상 멈춤* ${stale.length}`,
+          "",
+          [...byProject.entries()].map(([p, n]) => `• ${p} — ${n}건`).join("\n"),
+        ].join("\n")),
+      ];
+      if (stale.length) {
+        blocks.push(section(`*⏳ 오래 멈춰 있는 업무*\n${stale.slice(0, 5).map((i) => `• ${i.title} — ${idleDays(i.lastActive, today)}일째 (${i.project})`).join("\n")}`));
+      }
+      if (going.length) {
+        blocks.push(section(`*🔄 진행 중*\n${going.slice(0, 8).map((i) => `• ${i.title}${i.due ? ` · 마감 ${prettyKST(i.due)}` : ""} — ${i.recent[0] ?? "기록 없음"}`).join("\n")}`));
+      }
+      blocks.push(url ? section(`<${url}|🖥 전체 화면으로 보기>`) : context("전체 화면 주소를 만들려면 `CRON_SECRET` 과 배포 주소가 필요합니다."));
+      return { text: `업무 진행 현황 ${items.length}건`, blocks };
     }
 
     case "worklog.report": {
