@@ -270,3 +270,35 @@ describe("따옴표로 칸을 나눈 할일", () => {
     });
   });
 });
+
+describe("메일 → 노트", () => {
+  it("Re:·Fwd:·[태그] 를 걷어 낸 제목을 쓴다", async () => {
+    const { mailTitle } = await import("../lib/commands.js");
+    expect(mailTitle("Re: Fwd: [에너빌드] 계산서 검토 요청")).toBe("계산서 검토 요청");
+    expect(mailTitle("답장: 회의록")).toBe("회의록");
+    expect(mailTitle("")).toBe("제목 없는 메일");
+  });
+
+  it("인용문·서명 앞까지만 본문으로 남긴다", async () => {
+    const { cleanBody } = await import("../lib/gmail.js");
+    const raw = "1안 검토했습니다.\n장비일람표 확인 부탁드립니다.\n\n감사합니다\n\n> 이전 메일 내용\n> 더 있음";
+    const out = cleanBody(raw);
+    expect(out).toContain("1안 검토했습니다.");
+    expect(out).toContain("장비일람표");
+    expect(out).not.toContain("이전 메일 내용");
+  });
+
+  it("`/작업일지 메일` 을 검색어와 프로젝트로 나눈다", () => {
+    expect(parseCommand("/작업일지", "메일 계산서 검토 요청")).toEqual({ kind: "worklog.mail", query: "계산서 검토 요청" });
+    expect(parseCommand("/작업일지", "메일 계산서 | 에너빌드 | 에너지분석")).toEqual({
+      kind: "worklog.mail", query: "계산서", project: "에너빌드", sub: "에너지분석",
+    });
+  });
+
+  it("Gmail이 꺼져 있으면 안내만 하고 아무것도 만들지 않는다", async () => {
+    const before = files.size;
+    const r = await executeCommand({ kind: "worklog.mail", query: "계산서" }, { userId: "U1", channelId: "C1" });
+    expect(r.text).toContain("Gmail");
+    expect(files.size).toBe(before);
+  });
+});

@@ -4,6 +4,7 @@
  *   task_ticket            : notion: pending 표시
  *   task_project           : project 선택 후 할일 노트 생성
  *   cand_register / cand_ignore : Notion 할당 후보 → 노트 등록 / 무시
+ *   mail_note                  : Gmail 검색 결과 중 고른 메일 → 진행업무 노트
  *
  * 메시지 바로가기(message_action) — 메시지 `⋯` 메뉴
  *   to_worklog : 그 메시지를 #작업일지 채널로 옮기고 오늘 일일노트 메모로 남김
@@ -17,7 +18,8 @@ import { getTask, setStatus, STATUS_KO, type VaultStatus } from "../../src/lib/v
 import { ignoreCandidate, markPending, registerCandidate } from "../../src/lib/notion-sync.js";
 import { getTicket } from "../../src/lib/notion.js";
 import { syncTaskToCalendar } from "../../src/lib/gcal.js";
-import { addTask, executeCommand } from "../../src/lib/commands.js";
+import { addTask, executeCommand, noteFromMail } from "../../src/lib/commands.js";
+import { getMail } from "../../src/lib/gmail.js";
 import { appendMemo } from "../../src/lib/vault.js";
 import { resolveWorkDir } from "../../src/lib/notes.js";
 import { prettyKST, todayKST } from "../../src/lib/dates.js";
@@ -156,6 +158,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (actionId === "task_project") {
         const spec = JSON.parse(value);
         const r = await addTask({ title: spec.title, due: spec.due ?? null, priority: spec.priority, project: spec.project }, { userId, channelId: "", permalink: spec.permalink || undefined });
+        return reply(responseUrl, r.text, r.blocks, Boolean(r.inChannel));
+      }
+
+      if (actionId === "mail_note") {
+        const v = JSON.parse(value) as { id: string; p?: string; s?: string };
+        const mail = await getMail(v.id);
+        const r = await noteFromMail(mail, { userId, channelId: payload.channel?.id ?? "" }, v.p || undefined, v.s || undefined);
         return reply(responseUrl, r.text, r.blocks, Boolean(r.inChannel));
       }
 

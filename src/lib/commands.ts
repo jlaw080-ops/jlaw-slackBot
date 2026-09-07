@@ -17,11 +17,12 @@ import { config } from "./config.js";
 import { addDays, dayRangeKST, parseDateInput, prettyKST, todayKST } from "./dates.js";
 import { createTimedEvent, listEvents, syncTaskToCalendar } from "./gcal.js";
 import {
-  appendMemo, createTask, findTasksByKeyword, guessProject, listOpenTasks, PROJECTS, resolveProjectName, setStatus, STATUS_KO,
+  appendMemo, createTask, findTasksByKeyword, guessProject, listOpenTasks, PROJECTS, resolveProjectName, setStatus, shortTitle, STATUS_KO,
   type Priority, type VaultStatus, type VaultTask,
 } from "./vault.js";
-import { candidateCard, context, header, postMessage, projectPicker, section, taskCard, taskLine } from "./slack.js";
+import { candidateCard, context, header, mailCard, postMessage, projectPicker, section, taskCard, taskLine } from "./slack.js";
 import { resolveWorkDir, writeWorklogNote } from "./notes.js";
+import { getMail, mailToNoteLines, searchMails, type Mail } from "./gmail.js";
 import { runDailyBrief, eventLine } from "./brief.js";
 import { runWorklog } from "./worklog.js";
 import { findAssignedCandidates, markPending, refreshTicketStatus } from "./notion-sync.js";
@@ -41,6 +42,7 @@ export type Parsed =
   | { kind: "worklog.note"; text: string }
   | { kind: "worklog.vaultnote"; title: string; content: string; project?: string; sub?: string }
   | { kind: "worklog.modal"; title: string }
+  | { kind: "worklog.mail"; query: string; project?: string; sub?: string }
   | { kind: "todo.push"; target: "할일" | "작업일지"; scope: ListScope }
   | { kind: "worklog.generate" }
   | { kind: "schedule.list"; days: number; from: string }
@@ -192,6 +194,11 @@ export function parseCommand(command: string, text: string, today = todayKST()):
   if (kind === "작업일지") {
     if (isHelp) return { kind: "help", command: "작업일지" };
     if (["생성", "generate", "마감", "정리"].includes(sub)) return { kind: "worklog.generate" };
+    if (["메일", "mail", "gmail", "이메일"].includes(sub)) {
+      const [q, projRaw, subRaw] = restRaw.split("|").map((x) => x.trim());
+      if (!q) return { kind: "help", command: "작업일지" };
+      return { kind: "worklog.mail", query: q, project: projRaw || undefined, sub: subRaw || undefined };
+    }
     // `노트`로 시작하거나 여러 줄이면 → 프로젝트 폴더에 작업일지 노트를 만든다
     const isNote = ["노트", "note", "기록"].includes(sub);
     if (isNote || raw.includes("\n")) {
@@ -257,6 +264,9 @@ export const HELP: Record<string, string> = {
     "• 한 줄로 빠르게: `/작업일지 노트 계산서 검토 :: 1안 확인` — `::` 뒤가 내용입니다",
     "• 못 찾으면 `제목 | 프로젝트` 또는 `제목 | 프로젝트 | 서브폴더` 로 알려 주세요",
     "• 같은 이름의 노트가 있으면 덮어쓰지 않고 `## 진행`에 한 줄 덧붙입니다",
+    "*📧 메일을 노트로*",
+    "• `/작업일지 메일 검색어` — Gmail에서 찾아 그 메일을 프로젝트 진행업무 노트로 저장합니다 (여러 건이면 골라서)",
+    "• 프로젝트를 직접 정하려면 `/작업일지 메일 검색어 | 에너빌드 | 에너지분석`",
     "*🔁 채널 사이 옮기기*",
     "• 메시지 오른쪽 `⋯` → **작업일지로 보내기** — #할일 등 어느 채널의 메시지든 #작업일지로 옮기고 일일노트 메모로 남깁니다",
   ].join("\n"),
@@ -339,6 +349,42 @@ export async function pickTasks(scope: ListScope, today = todayKST()): Promise<{
   return { picked: tasks.filter((t) => (t.due && t.due <= weekEnd) || t.status === "in-progress" || t.status === "review"), title: "이번 주 + 진행 중" };
 }
 
+/** 메일 제목에서 Re:·Fwd:·[태그] 를 걷어 낸 노트 제목 */
+export function mailTitle(subject: string): string {
+  const cleaned = subject.replace(/^\s*((re|fw|fwd|답장|전달)\s*:\s*)+/gi, "").trim();
+  return (shortTitle(cleaned) || cleaned || "제목 없는 메일").slice(0, 80);
+}
+
+/** 메일 한 통 → 프로젝트 진행업무 노트 */
+export async function noteFromMail(mail: Mail, ctx: CommandContext, project?: string, sub?: string): Promise<CommandReply> {
+  const title = mailTitle(mail.subject);
+  const lines = mailToNoteLines(mail);
+  const r = await resolveWorkDir(`${title}\n${lines}`, project, sub);
+  if (!r.ok && r.reason === "no-project") {
+    return { text: `⚠️ "${title}" 이 어느 프로젝트인지 못 정했어요. \`/작업일지 메일 ${mail.subject.slice(0, 20)} | 에너빌드\` 처럼 프로젝트를 적어 주세요.\n가능한 프로젝트: ${PROJECTS.join(", ")}` };
+  }
+  if (!r.ok && r.reason === "no-workdir") {
+    return { text: `⚠️ \`${r.project}\` 아래에 \`01_진행업무\` 폴더가 없어요. Obsidian에서 폴더를 먼저 만들어 주세요.` };
+  }
+  if (!r.ok) {
+    return { text: `⚠️ \`${r.project}\`의 서브 폴더를 골라 주세요: ${r.choices.map((c) => c.label || "(바로 아래)").join(", ")}\n\`/작업일지 메일 검색어 | ${r.project} | 에너지분석\` 처럼 적어 주세요.` };
+  }
+  const note = await writeWorklogNote({
+    title, content: lines, project: r.project, subProject: r.workDir.label,
+    workDir: r.workDir.path, date: mail.date || todayKST(), time: mail.time,
+    source: `Gmail — ${mail.from} (${mail.date}) ${mail.url}`,
+  });
+  return {
+    inChannel: true,
+    text: `${note.created ? "📧 메일을 노트로 저장" : "➕ 기존 노트에 메일 추가"}: ${title}`,
+    blocks: [
+      section(`${note.created ? "📧 *메일을 노트로 저장*" : "➕ *기존 노트의 `## 진행`에 추가*"} → \`${note.path}\``),
+      section(`*${title}*\n${mail.from} · ${mail.date}${mail.time ? ` ${mail.time}` : ""}\n<${mail.url}|Gmail에서 열기>`),
+      context(`프로젝트 \`${r.project}\`${r.workDir.label ? ` · 서브 \`${r.workDir.label}\`` : ""}`),
+    ],
+  };
+}
+
 export async function executeCommand(p: Parsed, ctx: CommandContext): Promise<CommandReply> {
   const today = todayKST();
   switch (p.kind) {
@@ -392,6 +438,22 @@ export async function executeCommand(p: Parsed, ctx: CommandContext): Promise<Co
       if (picked.length > 12) blocks.push(context(`…외 ${picked.length - 12}건`));
       await postMessage(channel, `${title} ${picked.length}건`, blocks);
       return { text: `📤 <#${channel}>에 ${title} ${picked.length}건을 올렸어요.` };
+    }
+
+    case "worklog.mail": {
+      if (!config.gmail.enabled) {
+        return { text: "📧 Gmail이 아직 연결되지 않았어요. `docs/SETUP.md`의 \"Gmail 연결\" 절을 따라 `GOOGLE_OAUTH_*` 세 값을 넣어 주세요.\n지금 당장은 `/작업일지 노트` 입력 창에 메일 내용을 붙여넣는 방법을 쓰실 수 있어요." };
+      }
+      const mails = await searchMails(p.query, 5);
+      if (!mails.length) return { text: `📧 "${p.query}" 로 찾은 메일이 없어요. 제목의 일부나 보낸 사람 이름으로 다시 찾아 보세요. (예: \`from:홍길동\`, \`계산서\`)` };
+      if (mails.length === 1) return noteFromMail(mails[0], ctx, p.project, p.sub);
+      return {
+        text: `📧 "${p.query}" 로 ${mails.length}건 찾았어요 — 노트로 만들 메일을 골라 주세요.`,
+        blocks: [
+          section(`📧 *"${p.query}"* 로 ${mails.length}건 — 노트로 만들 메일을 골라 주세요`),
+          ...mails.flatMap((m) => mailCard(m, p.project, p.sub)),
+        ],
+      };
     }
 
     case "worklog.modal":

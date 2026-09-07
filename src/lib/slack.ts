@@ -166,6 +166,15 @@ export function candidateCard(c: Candidate) {
   ];
 }
 
+/** 메일 검색 결과 카드: 한 줄 + [이 메일로] 버튼 */
+export function mailCard(m: { id: string; subject: string; from: string; date: string; time: string; snippet: string; url: string }, project?: string, sub?: string) {
+  const who = m.from.replace(/<[^>]*>/g, "").replace(/"/g, "").trim() || m.from;
+  return [
+    section(`<${m.url}|${escapeMrkdwn(m.subject || "(제목 없음)")}>\n_${escapeMrkdwn(who)} · ${m.date}${m.time ? ` ${m.time}` : ""}_\n${escapeMrkdwn(m.snippet.slice(0, 160))}`),
+    { type: "actions", block_id: `mail:${m.id}`, elements: [btn("📧 이 메일로 노트", "mail_note", JSON.stringify({ id: m.id, p: project ?? "", s: sub ?? "" }), { style: "primary" })] },
+  ];
+}
+
 /** project 선택 카드 (todo-capture Step 4: project를 못 정하면 묻는다) */
 export function projectPicker(spec: Record<string, unknown>, projects: readonly string[]) {
   return [

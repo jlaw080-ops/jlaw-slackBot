@@ -164,9 +164,74 @@ Claude Code에서 "노션 티켓 발급" 이라고 하면 `notion-qa-ticket` 스
 | 수시 | `/티켓 발급 키워드` → `notion: pending` → Claude Code에서 스킬로 발급 | Slack → Claude Code |
 | 수시 | `/작업일지 ○○ 검토 완료` → 일일노트 WorkHub 블록 메모 | Slack |
 | 수시 | `/작업일지 노트` → 입력 창에 제목·내용 → 프로젝트 `01_진행업무` 폴더에 노트 | Slack → Obsidian |
+| 수시 | `/작업일지 메일 검색어` → 그 메일을 진행업무 노트로 | Gmail → Obsidian |
 | 수시 | `/할일 보내기 작업일지 오늘` → 볼트 할일을 그 채널에 게시 | Slack |
 | 수시 | 메시지 `⋯` → **작업일지로 보내기** → #할일 글을 #작업일지로 | Slack |
 | 18:00 | 🌙 작업일지: 완료·진행·일정·티켓 변화·메모 → 일일노트 블록 | Slack #작업일지 |
+
+---
+
+## 7단계. Gmail 연결 — 선택 (메일을 노트로)
+
+`/작업일지 메일 검색어` 로 메일을 찾아 프로젝트 노트로 저장하는 기능입니다.
+
+> **왜 캘린더보다 복잡한가** — 개인 Gmail 편지함은 캘린더처럼 "서비스 계정"에 공유할 수 없습니다.
+> 구글이 개인 계정에는 그 방식을 막아 두었기 때문에, **내가 한 번 로그인해서 받은 갱신 토큰**을 씁니다.
+> 아래는 한 번만 하면 되는 작업이고, 15분쯤 걸립니다.
+
+### 7-1. OAuth 클라이언트 만들기
+
+1. https://console.cloud.google.com → 상단에서 프로젝트 선택(없으면 **새 프로젝트** → 이름 `WorkHub`)
+2. 왼쪽 **API 및 서비스 → 라이브러리** → `Gmail API` 검색 → **사용 설정**
+3. 왼쪽 **API 및 서비스 → OAuth 동의 화면**
+   - User Type **외부** → 만들기
+   - 앱 이름 `WorkHub`, 사용자 지원 이메일·개발자 연락처에 본인 메일 → 저장하고 계속
+   - 범위 화면은 **그냥 저장하고 계속**
+   - **테스트 사용자** 화면에서 **+ ADD USERS** → 본인 Gmail 주소 추가 → 저장
+     *(이걸 빠뜨리면 나중에 "액세스 차단됨" 오류가 납니다)*
+4. 왼쪽 **API 및 서비스 → 사용자 인증 정보 → + 사용자 인증 정보 만들기 → OAuth 클라이언트 ID**
+   - 애플리케이션 유형 **데스크톱 앱**, 이름 `WorkHub` → 만들기
+   - **클라이언트 ID**와 **클라이언트 보안 비밀번호**가 나옵니다 → 창을 닫지 말고 다음 단계로
+
+### 7-2. 갱신 토큰 받기
+
+1. https://developers.google.com/oauthplayground 접속
+2. 오른쪽 위 **톱니바퀴(⚙️)** → **Use your own OAuth credentials** 체크 →
+   위에서 받은 클라이언트 ID·보안 비밀번호 붙여넣기
+3. 왼쪽 목록 맨 아래 입력칸에 아래를 붙여넣고 **Authorize APIs**
+   ```
+   https://www.googleapis.com/auth/gmail.readonly
+   ```
+4. 본인 Gmail로 로그인 → "확인되지 않은 앱" 경고가 나오면 **고급 → (안전하지 않음) 이동** → 허용
+5. **Exchange authorization code for tokens** 클릭 → **Refresh token** 값을 복사
+
+### 7-3. Vercel에 넣기
+
+Vercel 프로젝트 → Settings → Environment Variables 에 셋을 넣고 **Redeploy**.
+
+| Key | Value |
+|---|---|
+| `GOOGLE_OAUTH_CLIENT_ID` | 7-1에서 받은 클라이언트 ID |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | 7-1에서 받은 보안 비밀번호 |
+| `GOOGLE_OAUTH_REFRESH_TOKEN` | 7-2에서 받은 Refresh token |
+
+셋 중 하나라도 없으면 기능이 꺼진 채로 안내만 나옵니다.
+
+### 쓰는 법
+
+```
+/작업일지 메일 계산서 검토 요청
+/작업일지 메일 from:홍길동
+/작업일지 메일 계산서 | 에너빌드 | 에너지분석
+```
+
+- 최신순으로 최대 5건을 찾아 보여 주고, 여러 건이면 **📧 이 메일로 노트** 버튼으로 고릅니다.
+- 검색어는 Gmail 검색창과 같은 문법을 씁니다 (`from:`, `subject:`, `has:attachment` 등).
+- 제목의 `Re:`·`Fwd:`·`[태그]` 는 떼고, 본문은 인용문·서명 앞까지만 옮깁니다.
+- 노트 위치·형식은 `/작업일지 노트` 와 같습니다. `## 출처` 에 Gmail 링크가 남습니다.
+
+> **봇은 메일을 읽기만 합니다** (`gmail.readonly`). 보내거나 지우거나 라벨을 바꾸지 않습니다.
+> 토큰이 걱정되면 https://myaccount.google.com/permissions 에서 언제든 접근을 끊을 수 있습니다.
 
 ---
 
