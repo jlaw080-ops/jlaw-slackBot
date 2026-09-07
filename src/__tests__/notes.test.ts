@@ -250,3 +250,23 @@ describe("낱말 없이 값만 붙인 할일", () => {
     });
   });
 });
+
+describe("따옴표로 칸을 나눈 할일", () => {
+  it("실제로 겪은 입력을 나눈다 (빈 칸 포함)", () => {
+    expect(parseCommand("/할일", '추가 "BIPV 관련 추가 조사 진행" "" "high" "BIPV화재진단기술"', "2026-09-07")).toMatchObject({
+      kind: "todo.add", title: "BIPV 관련 추가 조사 진행", due: null, priority: "high", project: "BIPV특허기획",
+    });
+  });
+
+  it("굽은 따옴표도 받는다", () => {
+    expect(parseCommand("/할일", '추가 “계산서 검토” “내일” “높음” “에너빌드”', "2026-09-07")).toMatchObject({
+      title: "계산서 검토", due: "2026-09-08", priority: "high", project: "에너빌드",
+    });
+  });
+
+  it("따옴표가 하나뿐이면 평소대로 읽는다", () => {
+    expect(parseCommand("/할일", '추가 "긴급" 회의 준비 우선순위 높음', "2026-09-07")).toMatchObject({
+      title: '"긴급" 회의 준비', priority: "high",
+    });
+  });
+});

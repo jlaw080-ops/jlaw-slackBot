@@ -110,7 +110,27 @@ export function extractInline(text: string): { title: string; due?: string; prio
   return { title: title.replace(/\s+/g, " ").replace(/[\s,·]+$/, "").trim(), ...out };
 }
 
+/** `"제목" "마감" "우선순위" "프로젝트"` 처럼 따옴표로 칸을 나눈 경우 (곧은·굽은 따옴표 모두) */
+export function splitQuoted(text: string): string[] | null {
+  // \u201C \u201D 는 굽은 따옴표(" ") — 모바일 자동 변환 대비
+  const parts = [...text.matchAll(/[\u201C"']([^\u201C\u201D"']*)[\u201D"']/g)].map((m) => m[1].trim());
+  return parts.length >= 2 ? parts : null;
+}
+
 function parseAddSpec(text: string, today: string): AddSpec | null {
+  const quoted = splitQuoted(text);
+  if (quoted) {
+    const [title, dueRaw, prRaw, projRaw] = quoted;
+    if (!title) return null;
+    return {
+      title,
+      due: dueRaw ? parseDateInput(dueRaw, today) : null,
+      priority: prRaw ? PRIORITY_ALIAS[prRaw.toLowerCase()] : undefined,
+      project: projRaw ? matchProject(projRaw) : undefined,
+      rawDue: dueRaw || undefined,
+      rawProject: projRaw || undefined,
+    };
+  }
   const [head, dueBar, prBar, projBar] = text.split("|").map((s) => s.trim());
   if (!head) return null;
   // `|` 로 준 값이 우선, 없으면 제목 안에 말로 적은 값을 쓴다
@@ -222,6 +242,7 @@ export const HELP: Record<string, string> = {
     "*📋 /할일 — 창고는 Obsidian 볼트 `06_To Do/YYYY-MM/`*",
     "• `/할일 추가 제목 | 마감 | 우선순위 | 프로젝트` — 예) `/할일 추가 ZEB 검토서 작성 | 금요일 | 높음 | 에너빌드`",
     "   마감: 오늘·내일·모레·이번주·다음주·9/15·+3 / 우선순위: 높음·중간·낮음 / 프로젝트를 비우면 제목에서 추론하고, 못 정하면 버튼으로 묻습니다",
+    "   `|` 대신 이렇게 써도 됩니다 — `ZEB 검토서 작성 우선순위 높음 프로젝트 에너빌드 마감 금요일` · `\"ZEB 검토서 작성\" \"금요일\" \"높음\" \"에너빌드\"`",
     "• `/할일 목록 [전체|오늘|주간]` — 버튼으로 완료·진행 중·티켓 발급 대기",
     "• `/할일 완료|시작|검토|보류 키워드` — status: done / in-progress / review / backlog",
     "• `/할일 브리핑` — 아침 브리핑 지금 게시",
