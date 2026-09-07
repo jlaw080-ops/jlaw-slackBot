@@ -65,15 +65,53 @@ export function normalizeCommand(command: string): "할일" | "작업일지" | "
   return "unknown";
 }
 
+/** 프로젝트 이름 후보 문자열 → PROJECTS 중 하나 */
+function matchProject(raw: string): string | undefined {
+  const t = raw.trim();
+  if (!t) return undefined;
+  return PROJECTS.find((p) => p === t) ?? PROJECTS.find((p) => t.includes(p) || p.includes(t)) ?? guessProject(t) ?? undefined;
+}
+
+/**
+ * `|` 를 안 쓰고 말로 적은 값도 알아듣습니다.
+ *   "…프로세스 우선순위 높음 프로젝트 에너빌드 마감 내일"
+ *   → 제목 "…프로세스" / priority high / project 에너빌드 / due 내일
+ * 키워드가 없으면 아무것도 건드리지 않습니다.
+ */
+export function extractInline(text: string): { title: string; due?: string; priority?: string; project?: string } {
+  let title = text;
+  const out: { due?: string; priority?: string; project?: string } = {};
+
+  const take = (re: RegExp, key: "due" | "priority" | "project") => {
+    const m = re.exec(title);
+    if (!m) return;
+    out[key] = m[1].trim();
+    title = `${title.slice(0, m.index)} ${title.slice(m.index + m[0].length)}`;
+  };
+
+  // 프로젝트를 먼저 떼어 낸다 (뒤쪽 전부가 프로젝트 이름일 수 있으므로)
+  take(/\s*(?:프로젝트|project)\s*[:=]?\s*(\S+)/i, "project");
+  take(/\s*(?:우선순위|중요도|priority)\s*[:=]?\s*(높음|중간|낮음|상|중|하|high|mid|medium|low)(?![가-힣A-Za-z])/i, "priority");
+  take(/\s*(?:마감|기한|due)\s*[:=]?\s*(\S+)/i, "due");
+
+  return { title: title.replace(/\s+/g, " ").replace(/[\s,·]+$/, "").trim(), ...out };
+}
+
 function parseAddSpec(text: string, today: string): AddSpec | null {
-  const [title, dueRaw, prRaw, projRaw] = text.split("|").map((s) => s.trim());
+  const [head, dueBar, prBar, projBar] = text.split("|").map((s) => s.trim());
+  if (!head) return null;
+  // `|` 로 준 값이 우선, 없으면 제목 안에 말로 적은 값을 쓴다
+  const inline = extractInline(head);
+  const title = inline.title || head;
+  const dueRaw = dueBar || inline.due;
+  const prRaw = prBar || inline.priority;
+  const projRaw = projBar || inline.project;
   if (!title) return null;
-  const project = projRaw ? (PROJECTS.find((p) => p === projRaw || p.includes(projRaw)) ?? guessProject(projRaw) ?? undefined) : undefined;
   return {
     title,
     due: dueRaw ? parseDateInput(dueRaw, today) : null,
     priority: prRaw ? PRIORITY_ALIAS[prRaw.toLowerCase()] : undefined,
-    project,
+    project: projRaw ? matchProject(projRaw) : undefined,
     rawDue: dueRaw || undefined,
     rawProject: projRaw || undefined,
   };

@@ -198,3 +198,37 @@ describe("아카이브 폴더 제외", () => {
     }
   });
 });
+
+describe("`|` 없이 말로 적은 할일", () => {
+  it("실제로 겪은 입력을 제대로 나눈다", () => {
+    const p = parseCommand(
+      "/할일",
+      "추가 데이터센터 ALT 로직 생성 프로세스(전력계통영향평가 고려) 우선순위 high 프로젝트 에너빌드(에너지분석(에너빌드))",
+      "2026-09-07",
+    );
+    expect(p).toMatchObject({
+      kind: "todo.add",
+      title: "데이터센터 ALT 로직 생성 프로세스(전력계통영향평가 고려)",
+      priority: "high",
+      project: "에너빌드",
+    });
+  });
+
+  it("한글 우선순위·마감도 알아듣는다", () => {
+    expect(parseCommand("/할일", "추가 계산서 검토 우선순위 높음 프로젝트 에너빌드 마감 내일", "2026-09-07")).toMatchObject({
+      kind: "todo.add", title: "계산서 검토", priority: "high", project: "에너빌드", due: "2026-09-08",
+    });
+  });
+
+  it("`|` 로 준 값이 말로 적은 값보다 우선한다", () => {
+    expect(parseCommand("/할일", "추가 계산서 검토 우선순위 낮음 | | 높음 | 에너빌드", "2026-09-07")).toMatchObject({
+      title: "계산서 검토", priority: "high", project: "에너빌드",
+    });
+  });
+
+  it("키워드가 없으면 제목을 그대로 둔다", () => {
+    expect(parseCommand("/할일", "추가 우선순위 정하기 회의", "2026-09-07")).toMatchObject({
+      kind: "todo.add", title: "우선순위 정하기 회의",
+    });
+  });
+});
