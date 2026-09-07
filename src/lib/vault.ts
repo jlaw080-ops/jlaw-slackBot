@@ -346,6 +346,32 @@ const KEYWORDS: Array<[RegExp, string]> = [
   [/기업부설연구소|구독\s*서비스|강의|지명원/i, "에너지노관리"],
 ];
 
+/** 흔히 줄여 부르는 이름 · 볼트 폴더 이름 → 정식 project 이름 */
+export const PROJECT_ALIASES: Record<string, string> = {
+  EPC: "신재생에너지제안(EPC)",
+  "신재생에너지검토제안(EPC)": "신재생에너지제안(EPC)",
+  신재생에너지제안: "신재생에너지제안(EPC)",
+  BIPV: "BIPV특허기획",
+  BIPV화재진단기술: "BIPV특허기획",
+  ESS: "ESS사업(스탠다드에너지)",
+  스탠다드에너지: "ESS사업(스탠다드에너지)",
+  분산자원: "분산자원통합운영플랫폼",
+  연료전지: "연료전지급탕패키지",
+  에너지노: "에너지노관리",
+  에너지노행정관련: "에너지노관리",
+};
+
+/** 사용자가 적은 이름 → 정식 project 이름. 확실할 때만 값을 돌려준다 (추론은 하지 않음) */
+export function resolveProjectName(raw: string): string | null {
+  const t = raw.trim().replace(/^\d+[_\-. ]*/, "");
+  if (!t) return null;
+  const exact = PROJECTS.find((p) => p === t);
+  if (exact) return exact;
+  const alias = PROJECT_ALIASES[t];
+  if (alias) return alias;
+  return PROJECTS.find((p) => p.includes(t) || t.includes(p)) ?? null;
+}
+
 /** 제목·메모에서 project 추론. 못 정하면 null (→ 사용자에게 묻는다) */
 export function guessProject(text: string): string | null {
   for (const [re, p] of KEYWORDS) if (re.test(text)) return p;

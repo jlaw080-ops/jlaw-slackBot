@@ -17,7 +17,7 @@ import { config } from "./config.js";
 import { addDays, dayRangeKST, parseDateInput, prettyKST, todayKST } from "./dates.js";
 import { createTimedEvent, listEvents, syncTaskToCalendar } from "./gcal.js";
 import {
-  appendMemo, createTask, findTasksByKeyword, guessProject, listOpenTasks, PROJECTS, setStatus, STATUS_KO,
+  appendMemo, createTask, findTasksByKeyword, guessProject, listOpenTasks, PROJECTS, resolveProjectName, setStatus, STATUS_KO,
   type Priority, type VaultStatus, type VaultTask,
 } from "./vault.js";
 import { candidateCard, context, header, postMessage, projectPicker, section, taskCard, taskLine } from "./slack.js";
@@ -69,7 +69,7 @@ export function normalizeCommand(command: string): "할일" | "작업일지" | "
 function matchProject(raw: string): string | undefined {
   const t = raw.trim();
   if (!t) return undefined;
-  return PROJECTS.find((p) => p === t) ?? PROJECTS.find((p) => t.includes(p) || p.includes(t)) ?? guessProject(t) ?? undefined;
+  return resolveProjectName(t) ?? guessProject(t) ?? undefined;
 }
 
 /**
@@ -94,10 +94,43 @@ export function extractInline(text: string): { title: string; due?: string; prio
   take(/\s*(?:우선순위|중요도|priority)\s*[:=]?\s*(높음|중간|낮음|상|중|하|high|mid|medium|low)(?![가-힣A-Za-z])/i, "priority");
   take(/\s*(?:마감|기한|due)\s*[:=]?\s*(\S+)/i, "due");
 
+  // 낱말 없이 값만 뒤에 붙인 경우도 본다: "…조사 진행 high BIPV화재진단기술"
+  // 제목이 너무 짧아지지 않도록 남는 낱말이 2개 이상일 때만 떼어 냅니다.
+  const BARE_PRIORITY = /^(높음|중간|낮음|high|mid|low)$/i;
+  for (let i = 0; i < 2; i++) {
+    const words = title.trim().split(/\s+/);
+    if (words.length < 3) break;
+    const last = words[words.length - 1];
+    if (!out.priority && BARE_PRIORITY.test(last)) { out.priority = last; words.pop(); }
+    else if (!out.project && resolveProjectName(last)) { out.project = last; words.pop(); }
+    else break;
+    title = words.join(" ");
+  }
+
   return { title: title.replace(/\s+/g, " ").replace(/[\s,·]+$/, "").trim(), ...out };
 }
 
+/** `"제목" "마감" "우선순위" "프로젝트"` 처럼 따옴표로 칸을 나눈 경우 (곧은·굽은 따옴표 모두) */
+export function splitQuoted(text: string): string[] | null {
+  // \u201C \u201D 는 굽은 따옴표(" ") — 모바일 자동 변환 대비
+  const parts = [...text.matchAll(/[\u201C"']([^\u201C\u201D"']*)[\u201D"']/g)].map((m) => m[1].trim());
+  return parts.length >= 2 ? parts : null;
+}
+
 function parseAddSpec(text: string, today: string): AddSpec | null {
+  const quoted = splitQuoted(text);
+  if (quoted) {
+    const [title, dueRaw, prRaw, projRaw] = quoted;
+    if (!title) return null;
+    return {
+      title,
+      due: dueRaw ? parseDateInput(dueRaw, today) : null,
+      priority: prRaw ? PRIORITY_ALIAS[prRaw.toLowerCase()] : undefined,
+      project: projRaw ? matchProject(projRaw) : undefined,
+      rawDue: dueRaw || undefined,
+      rawProject: projRaw || undefined,
+    };
+  }
   const [head, dueBar, prBar, projBar] = text.split("|").map((s) => s.trim());
   if (!head) return null;
   // `|` 로 준 값이 우선, 없으면 제목 안에 말로 적은 값을 쓴다
@@ -209,6 +242,7 @@ export const HELP: Record<string, string> = {
     "*📋 /할일 — 창고는 Obsidian 볼트 `06_To Do/YYYY-MM/`*",
     "• `/할일 추가 제목 | 마감 | 우선순위 | 프로젝트` — 예) `/할일 추가 ZEB 검토서 작성 | 금요일 | 높음 | 에너빌드`",
     "   마감: 오늘·내일·모레·이번주·다음주·9/15·+3 / 우선순위: 높음·중간·낮음 / 프로젝트를 비우면 제목에서 추론하고, 못 정하면 버튼으로 묻습니다",
+    "   `|` 대신 이렇게 써도 됩니다 — `ZEB 검토서 작성 우선순위 높음 프로젝트 에너빌드 마감 금요일` · `\"ZEB 검토서 작성\" \"금요일\" \"높음\" \"에너빌드\"`",
     "• `/할일 목록 [전체|오늘|주간]` — 버튼으로 완료·진행 중·티켓 발급 대기",
     "• `/할일 완료|시작|검토|보류 키워드` — status: done / in-progress / review / backlog",
     "• `/할일 브리핑` — 아침 브리핑 지금 게시",
