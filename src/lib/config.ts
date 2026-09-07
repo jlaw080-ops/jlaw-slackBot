@@ -66,6 +66,14 @@ export const config = {
   },
 
   /** Vercel Cron 및 수동 호출 보호용 비밀값 */
+  /** 배포 주소 — Slack에서 현황 화면 링크를 만들 때 씁니다 (Vercel이 자동으로 넣어 줍니다) */
+  get baseUrl() {
+    const explicit = opt("PUBLIC_BASE_URL");
+    if (explicit) return explicit.replace(/\/$/, "");
+    const v = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+    return v ? `https://${v}` : "";
+  },
+
   /** 일일보고 머리글에 들어갈 이름 — "일일보고(김지헌) - 2026-09-07" */
   get reportAuthor() { return opt("REPORT_AUTHOR", "김지헌"); },
 

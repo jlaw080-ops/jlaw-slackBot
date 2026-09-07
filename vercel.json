@@ -7,7 +7,8 @@
     "api/slack/command.ts": { "maxDuration": 60 },
     "api/slack/interactive.ts": { "maxDuration": 60 },
     "api/notion/webhook.ts": { "maxDuration": 60 },
-    "api/health.ts": { "maxDuration": 30 }
+    "api/health.ts": { "maxDuration": 30 },
+    "api/board.ts": { "maxDuration": 60 }
   },
   "crons": [
     { "path": "/api/cron/daily-brief", "schedule": "0 23 * * *" },
