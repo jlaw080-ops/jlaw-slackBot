@@ -232,3 +232,21 @@ describe("`|` 없이 말로 적은 할일", () => {
     });
   });
 });
+
+describe("낱말 없이 값만 붙인 할일", () => {
+  it("실제로 겪은 두 번째 입력을 나눈다", () => {
+    expect(parseCommand("/할일", "추가 BIPV 관련 추가 조사 진행 high BIPV화재진단기술", "2026-09-07")).toMatchObject({
+      kind: "todo.add", title: "BIPV 관련 추가 조사 진행", priority: "high", project: "BIPV특허기획",
+    });
+  });
+
+  it("제목이 두 낱말 이하로 줄어들 만큼은 떼지 않는다", () => {
+    expect(parseCommand("/할일", "추가 검토 에너빌드", "2026-09-07")).toMatchObject({ title: "검토 에너빌드" });
+  });
+
+  it("우선순위로 읽힐 만한 낱말이 없으면 그대로 둔다", () => {
+    expect(parseCommand("/할일", "추가 계산서 정확도 검증하기", "2026-09-07")).toMatchObject({
+      title: "계산서 정확도 검증하기", priority: undefined,
+    });
+  });
+});

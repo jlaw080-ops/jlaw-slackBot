@@ -17,7 +17,7 @@ import { config } from "./config.js";
 import { addDays, dayRangeKST, parseDateInput, prettyKST, todayKST } from "./dates.js";
 import { createTimedEvent, listEvents, syncTaskToCalendar } from "./gcal.js";
 import {
-  appendMemo, createTask, findTasksByKeyword, guessProject, listOpenTasks, PROJECTS, setStatus, STATUS_KO,
+  appendMemo, createTask, findTasksByKeyword, guessProject, listOpenTasks, PROJECTS, resolveProjectName, setStatus, STATUS_KO,
   type Priority, type VaultStatus, type VaultTask,
 } from "./vault.js";
 import { candidateCard, context, header, postMessage, projectPicker, section, taskCard, taskLine } from "./slack.js";
@@ -69,7 +69,7 @@ export function normalizeCommand(command: string): "할일" | "작업일지" | "
 function matchProject(raw: string): string | undefined {
   const t = raw.trim();
   if (!t) return undefined;
-  return PROJECTS.find((p) => p === t) ?? PROJECTS.find((p) => t.includes(p) || p.includes(t)) ?? guessProject(t) ?? undefined;
+  return resolveProjectName(t) ?? guessProject(t) ?? undefined;
 }
 
 /**
@@ -93,6 +93,19 @@ export function extractInline(text: string): { title: string; due?: string; prio
   take(/\s*(?:프로젝트|project)\s*[:=]?\s*(\S+)/i, "project");
   take(/\s*(?:우선순위|중요도|priority)\s*[:=]?\s*(높음|중간|낮음|상|중|하|high|mid|medium|low)(?![가-힣A-Za-z])/i, "priority");
   take(/\s*(?:마감|기한|due)\s*[:=]?\s*(\S+)/i, "due");
+
+  // 낱말 없이 값만 뒤에 붙인 경우도 본다: "…조사 진행 high BIPV화재진단기술"
+  // 제목이 너무 짧아지지 않도록 남는 낱말이 2개 이상일 때만 떼어 냅니다.
+  const BARE_PRIORITY = /^(높음|중간|낮음|high|mid|low)$/i;
+  for (let i = 0; i < 2; i++) {
+    const words = title.trim().split(/\s+/);
+    if (words.length < 3) break;
+    const last = words[words.length - 1];
+    if (!out.priority && BARE_PRIORITY.test(last)) { out.priority = last; words.pop(); }
+    else if (!out.project && resolveProjectName(last)) { out.project = last; words.pop(); }
+    else break;
+    title = words.join(" ");
+  }
 
   return { title: title.replace(/\s+/g, " ").replace(/[\s,·]+$/, "").trim(), ...out };
 }
