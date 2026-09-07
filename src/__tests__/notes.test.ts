@@ -302,3 +302,83 @@ describe("메일 → 노트", () => {
     expect(files.size).toBe(before);
   });
 });
+
+describe("일일보고 초안", () => {
+  const DAILY = "05_Daily/2026-09-07.md";
+
+  beforeEach(() => {
+    // 오늘 진행업무 노트 (진행 섹션에 오늘 날짜 항목)
+    files.set(`${ENERBUILD}/03_에너지분석/01_진행업무/0907_계산서 검토/0907_계산서 검토.md`,
+      "---\nproject: 에너빌드\nstatus: in-progress\nworks-url: https://works.do/abc\nupdated: 2026-09-07\n---\n\n" +
+      "# 계산서 검토\n\n## 진행\n\n- 2026-09-06 10:00\n\t- 어제 한 일\n- 2026-09-07 10:30\n\t- 1안 계산 결과 확인\n\t- 장비일람표 반영 필요\n\n## 출처\n\n- Slack\n");
+    // 오늘 완료한 할일
+    files.set("06_To Do/2026-09/0901_규제 정리.md",
+      "---\nproject: 신재생에너지제안(EPC)\nstatus: done\ncreated: 2026-09-01\ncompleted: 2026-09-07\n---\n\n" +
+      "## 업무 개요\n- 데이터센터 규제 사항 정리해 내부 공유\n\n## 진행상황\n- 최신 개정 반영 완료\n- 슬라이드 초안 작성\n");
+    // 어제 움직인 할일 — 보고에 들어가면 안 된다
+    files.set("06_To Do/2026-09/0902_지난건.md",
+      "---\nproject: 에너빌드\nstatus: in-progress\ncreated: 2026-09-02\nupdated: 2026-09-05\n---\n\n## 업무 개요\n- 지난 건\n");
+    // 사람이 쓴 일일노트 + 봇 블록
+    files.set(DAILY, "---\ntags: Daily\n---\n**일일보고(김지헌) - 2026-09-07**\n\n1. 직접 쓴 항목\n\n#### Memo\n-\n\n" +
+      "<!-- WORKHUB-LOG:START -->\n### 📝 메모\n- 14:00 회의록 정리함\n<!-- WORKHUB-LOG:END -->\n");
+  });
+
+  it("오늘 움직인 것만 모은다", async () => {
+    const { collectReport } = await import("../lib/report.js");
+    const items = await collectReport("2026-09-07");
+    const titles = items.map((i) => i.title);
+    expect(titles).toContain("계산서 검토");
+    expect(titles).toContain("규제 정리");
+    expect(titles).toContain("기타");
+    expect(titles).not.toContain("지난건");
+  });
+
+  it("그날 `## 진행` 항목만 골라 쓴다", async () => {
+    const { collectReport } = await import("../lib/report.js");
+    const items = await collectReport("2026-09-07");
+    const it = items.find((i) => i.title === "계산서 검토")!;
+    expect(it.bullets).toEqual(["1안 계산 결과 확인", "장비일람표 반영 필요"]);
+    expect(it.bullets).not.toContain("어제 한 일");
+    expect(it.links).toContain("https://works.do/abc");
+  });
+
+  it("양식대로 엮는다", async () => {
+    const { collectReport, renderReport } = await import("../lib/report.js");
+    const text = renderReport(await collectReport("2026-09-07"), "2026-09-07", "김지헌");
+    expect(text.split("\n")[0]).toBe("**일일보고(김지헌) - 2026-09-07**");
+    expect(text).toMatch(/^1\. /m);
+    expect(text).toMatch(/^ {4}- 1안 계산 결과 확인$/m);
+    expect(text).toContain("(완료)"); // status: done 인 항목
+  });
+
+  it("사람이 쓴 부분과 다른 블록을 건드리지 않는다", async () => {
+    const r = await executeCommand({ kind: "worklog.report", date: "2026-09-07" }, { userId: "U1", channelId: "C1" });
+    expect(r.text).toContain("일일보고 초안");
+    const after = files.get(DAILY)!;
+    expect(after).toContain("1. 직접 쓴 항목");          // 사람이 쓴 영역 그대로
+    expect(after).toContain("<!-- WORKHUB-LOG:START -->"); // 다른 블록 그대로
+    expect(after).toContain("<!-- WORKHUB-REPORT:START -->");
+    expect(after).toContain("계산서 검토");
+  });
+
+  it("두 번 실행해도 블록이 하나만 남는다", async () => {
+    await executeCommand({ kind: "worklog.report", date: "2026-09-07" }, { userId: "U1", channelId: "C1" });
+    await executeCommand({ kind: "worklog.report", date: "2026-09-07" }, { userId: "U1", channelId: "C1" });
+    expect(files.get(DAILY)!.match(/WORKHUB-REPORT:START/g)).toHaveLength(1);
+  });
+
+  it("`/작업일지 일일보고 어제` 는 어제 날짜로", () => {
+    expect(parseCommand("/작업일지", "일일보고 어제", "2026-09-07")).toEqual({ kind: "worklog.report", date: "2026-09-06" });
+    expect(parseCommand("/작업일지", "일일보고", "2026-09-07")).toEqual({ kind: "worklog.report", date: "2026-09-07" });
+  });
+});
+
+describe("지난 날짜 표현", () => {
+  it("어제·그제·-N 을 읽는다", async () => {
+    const { parseDateInput } = await import("../lib/dates.js");
+    expect(parseDateInput("어제", "2026-09-07")).toBe("2026-09-06");
+    expect(parseDateInput("그제", "2026-09-07")).toBe("2026-09-05");
+    expect(parseDateInput("-3", "2026-09-07")).toBe("2026-09-04");
+    expect(parseDateInput("+3", "2026-09-07")).toBe("2026-09-10"); // 기존 동작 유지
+  });
+});

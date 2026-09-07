@@ -66,6 +66,9 @@ export const config = {
   },
 
   /** Vercel Cron 및 수동 호출 보호용 비밀값 */
+  /** 일일보고 머리글에 들어갈 이름 — "일일보고(김지헌) - 2026-09-07" */
+  get reportAuthor() { return opt("REPORT_AUTHOR", "김지헌"); },
+
   /**
    * Gmail 읽기 — 개인 편지함은 서비스 계정으로 못 읽어 OAuth 갱신 토큰을 씁니다.
    * 셋 다 있어야 켜집니다. 봇은 읽기만 합니다 (gmail.readonly).

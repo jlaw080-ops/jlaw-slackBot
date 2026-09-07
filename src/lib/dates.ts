@@ -58,8 +58,11 @@ export function parseDateInput(text: string, base: string = todayKST()): string 
   if (t === "오늘") return base;
   if (t === "내일") return addDays(base, 1);
   if (t === "모레") return addDays(base, 2);
-  const plus = /^\+(\d{1,3})$/.exec(t);
-  if (plus) return addDays(base, Number(plus[1]));
+  // 지난 날짜 — 일일보고처럼 "어제 것"을 다룰 때 씁니다
+  if (t === "어제") return addDays(base, -1);
+  if (t === "그제" || t === "그저께" || t === "엊그제") return addDays(base, -2);
+  const plus = /^([+-])(\d{1,3})$/.exec(t);
+  if (plus) return addDays(base, Number(plus[2]) * (plus[1] === "-" ? -1 : 1));
   if (t === "이번주" || t === "금요일") return thisFriday(base);
   if (t === "다음주") return addDays(thisFriday(base), 7);
   let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(t);
