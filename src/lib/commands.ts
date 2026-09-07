@@ -23,6 +23,7 @@ import {
 import { candidateCard, context, header, mailCard, postMessage, projectPicker, section, taskCard, taskLine } from "./slack.js";
 import { resolveWorkDir, writeWorklogNote } from "./notes.js";
 import { getMail, mailToNoteLines, searchMails, type Mail } from "./gmail.js";
+import { collectReport, renderReport, writeReportBlock } from "./report.js";
 import { runDailyBrief, eventLine } from "./brief.js";
 import { runWorklog } from "./worklog.js";
 import { findAssignedCandidates, markPending, refreshTicketStatus } from "./notion-sync.js";
@@ -43,6 +44,7 @@ export type Parsed =
   | { kind: "worklog.vaultnote"; title: string; content: string; project?: string; sub?: string }
   | { kind: "worklog.modal"; title: string }
   | { kind: "worklog.mail"; query: string; project?: string; sub?: string }
+  | { kind: "worklog.report"; date: string }
   | { kind: "todo.push"; target: "할일" | "작업일지"; scope: ListScope }
   | { kind: "worklog.generate" }
   | { kind: "schedule.list"; days: number; from: string }
@@ -194,6 +196,11 @@ export function parseCommand(command: string, text: string, today = todayKST()):
   if (kind === "작업일지") {
     if (isHelp) return { kind: "help", command: "작업일지" };
     if (["생성", "generate", "마감", "정리"].includes(sub)) return { kind: "worklog.generate" };
+    if (["일일보고", "보고", "report", "일보"].includes(sub)) {
+      const when = rest.trim();
+      const date = when ? (parseDateInput(when, today) ?? today) : today;
+      return { kind: "worklog.report", date };
+    }
     if (["메일", "mail", "gmail", "이메일"].includes(sub)) {
       const [q, projRaw, subRaw] = restRaw.split("|").map((x) => x.trim());
       if (!q) return { kind: "help", command: "작업일지" };
@@ -264,6 +271,9 @@ export const HELP: Record<string, string> = {
     "• 한 줄로 빠르게: `/작업일지 노트 계산서 검토 :: 1안 확인` — `::` 뒤가 내용입니다",
     "• 못 찾으면 `제목 | 프로젝트` 또는 `제목 | 프로젝트 | 서브폴더` 로 알려 주세요",
     "• 같은 이름의 노트가 있으면 덮어쓰지 않고 `## 진행`에 한 줄 덧붙입니다",
+    "*📋 일일보고 초안*",
+    "• `/작업일지 일일보고` — 오늘 움직인 할일·진행업무 노트·메모를 모아 팀 공유 양식으로 엮어 줍니다 (`/작업일지 일일보고 어제` 도 가능)",
+    "   초안은 일일노트 아래 별도 블록에 넣습니다. 문장을 다듬어 위로 옮기시면 됩니다",
     "*📧 메일을 노트로*",
     "• `/작업일지 메일 검색어` — Gmail에서 찾아 그 메일을 프로젝트 진행업무 노트로 저장합니다 (여러 건이면 골라서)",
     "• 프로젝트를 직접 정하려면 `/작업일지 메일 검색어 | 에너빌드 | 에너지분석`",
@@ -438,6 +448,21 @@ export async function executeCommand(p: Parsed, ctx: CommandContext): Promise<Co
       if (picked.length > 12) blocks.push(context(`…외 ${picked.length - 12}건`));
       await postMessage(channel, `${title} ${picked.length}건`, blocks);
       return { text: `📤 <#${channel}>에 ${title} ${picked.length}건을 올렸어요.` };
+    }
+
+    case "worklog.report": {
+      const items = await collectReport(p.date);
+      const text = renderReport(items, p.date);
+      const { path } = await writeReportBlock(text, p.date);
+      const counts = ["진행업무", "할일", "메모"].map((k) => `${k} ${items.filter((i) => i.from === k).length}`).join(" · ");
+      return {
+        text: `📋 ${prettyKST(p.date)} 일일보고 초안 (${counts})`,
+        blocks: [
+          section(`📋 *${prettyKST(p.date)} 일일보고 초안* — ${counts}`),
+          section("```\n" + text.slice(0, 2800) + "\n```"),
+          context(`일일노트 \`${path}\` 아래 블록에도 넣었어요. 문장을 다듬어 위로 옮기시면 됩니다.`),
+        ],
+      };
     }
 
     case "worklog.mail": {
