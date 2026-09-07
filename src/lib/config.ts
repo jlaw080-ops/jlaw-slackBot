@@ -67,6 +67,19 @@ export const config = {
 
   /** Vercel Cron 및 수동 호출 보호용 비밀값 */
   /**
+   * Gmail 읽기 — 개인 편지함은 서비스 계정으로 못 읽어 OAuth 갱신 토큰을 씁니다.
+   * 셋 다 있어야 켜집니다. 봇은 읽기만 합니다 (gmail.readonly).
+   */
+  gmail: {
+    get clientId() { return req("GOOGLE_OAUTH_CLIENT_ID"); },
+    get clientSecret() { return req("GOOGLE_OAUTH_CLIENT_SECRET"); },
+    get refreshToken() { return req("GOOGLE_OAUTH_REFRESH_TOKEN"); },
+    get enabled() {
+      return Boolean(process.env.GOOGLE_OAUTH_CLIENT_ID && process.env.GOOGLE_OAUTH_CLIENT_SECRET && process.env.GOOGLE_OAUTH_REFRESH_TOKEN);
+    },
+  },
+
+  /**
    * 전체 구조 문서를 올려 둔 공개 웹페이지. Slack 도움말 아래에 링크로 붙습니다.
    * 주소가 바뀌면 환경변수 DOC_URL 로 덮어쓸 수 있습니다. (한글 경로는 퍼센트 인코딩)
    */
