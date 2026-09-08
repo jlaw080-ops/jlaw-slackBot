@@ -26,7 +26,7 @@ export interface ReportItem {
   links: string[];
   done: boolean;
   /** 어디서 왔는지 — Slack 안내용 */
-  from: "할일" | "진행업무" | "메모";
+  from: "할일" | "진행업무" | "메모" | "일일노트";
 }
 
 // ---------- 본문에서 꺼내기 ----------
@@ -66,6 +66,75 @@ export function progressOn(md: string, date: string): string[] {
     if (item) out.push(item);
   }
   return out.slice(0, 6);
+}
+
+// ---------- 일일노트에 사람이 직접 쓴 부분 ----------
+/** 자동 생성 블록과 git 충돌 표시를 걷어내고, 사람이 쓴 본문만 남깁니다 */
+export function stripBlocks(md: string): string {
+  return md
+    .replace(/<!-- WORKHUB-LOG:START -->[\s\S]*?<!-- WORKHUB-LOG:END -->/g, "")
+    .replace(/<!-- WORKHUB-REPORT:START -->[\s\S]*?<!-- WORKHUB-REPORT:END -->/g, "")
+    .replace(/^(?:<{7}|={7}|>{7}).*$/gm, "")                                  // git 충돌 표시
+    .replace(/^---\n[\s\S]*?\n---\n/, "")                                    // frontmatter
+    .replace(/^\s*\*\*일일보고\(.*?\)\s*[-–]\s*\d{4}-\d{2}-\d{2}\*\*\s*$/gm, ""); // 중복 제목줄
+}
+
+const indentWidth = (s: string) => [...s].reduce((n, c) => n + (c === "\t" ? 4 : 1), 0);
+const cleanLine = (s: string) =>
+  s.replace(/^\[[ xX]\]\s*/, "").replace(/\*\*/g, "").replace(/\s+$/, "").trim();
+
+interface RawBullet { w: number; text: string }
+
+/**
+ * 일일노트 본문을 보고 항목을 뽑습니다.
+ *   `## 제목` / `1. 제목`  → 항목
+ *   `- 내용`               → 그 항목의 하위 내용 (들여쓰기 깊이 유지)
+ * 어느 항목에도 안 붙는 줄은 「기타」로 모읍니다.
+ */
+export function handwritten(md: string): ReportItem[] {
+  const items: ReportItem[] = [];
+  let title = "";
+  let done = false;
+  let raw: RawBullet[] = [];
+
+  const flush = () => {
+    if (!title && !raw.length) return;
+    const min = raw.length ? Math.min(...raw.map((b) => b.w)) : 0;
+    items.push({
+      title: title || "기타",
+      project: "",
+      bullets: raw.map((b) => "\t".repeat(Math.min(3, Math.round((b.w - min) / 4))) + b.text),
+      links: [],
+      done,
+      from: "일일노트",
+    });
+    title = ""; done = false; raw = [];
+  };
+  const start = (t: string, isDone: boolean) => { flush(); title = t; done = isDone; };
+
+  for (const line of stripBlocks(md).split("\n")) {
+    if (!line.trim()) continue;
+    const isDone = /^\s*(?:[-*·]|\d+[.)]|#{1,4})?\s*\[[xX]\]/.test(line);
+
+    const head = /^#{1,4}\s+(.+?)\s*#*$/.exec(line);
+    if (head) { start(cleanLine(head[1]), isDone); continue; }
+
+    const num = /^[ \t]{0,3}\d+[.)]\s+(.+)$/.exec(line);
+    if (num) { start(cleanLine(num[1]), isDone); continue; }
+
+    const bul = /^([ \t]*)[-*·]\s+(.+)$/.exec(line);
+    if (bul) {
+      const text = cleanLine(bul[2]);
+      if (text) raw.push({ w: indentWidth(bul[1]), text });
+      continue;
+    }
+
+    const text = cleanLine(line);
+    if (!text) continue;
+    if (!title && !raw.length) title = text; else raw.push({ w: 0, text });
+  }
+  flush();
+  return items.filter((i) => i.title !== "기타" || i.bullets.length);
 }
 
 // ---------- 재료 모으기 ----------
@@ -135,8 +204,17 @@ export async function collectReport(date = todayKST()): Promise<ReportItem[]> {
     });
   }
 
-  // 3) 일일노트 메모 — 어느 항목에도 안 붙는 것들
   const daily = await findDailyNote(date);
+
+  // 3) 일일노트에 사람이 직접 쓴 내용 — 봇 블록 바깥
+  if (daily) {
+    for (const it of handwritten(daily.content)) {
+      if (items.some((x) => x.title === it.title)) continue;
+      items.push(it);
+    }
+  }
+
+  // 4) 일일노트 메모 — 어느 항목에도 안 붙는 것들
   const memos = daily ? extractMemos(daily.content).map((m) => m.replace(/^\d{1,2}:\d{2}\s*/, "")) : [];
   if (memos.length) items.push({ title: "기타", project: "", bullets: memos.slice(0, 8), links: [], done: false, from: "메모" });
 
@@ -149,7 +227,10 @@ export function renderReport(items: ReportItem[], date = todayKST(), author = co
   if (!items.length) return [head, "", "1. (오늘 기록된 작업이 없습니다)", ""].join("\n");
   const body = items.map((it, i) => {
     const lines = [`${i + 1}. ${it.title}${it.done ? " (완료)" : ""}`];
-    for (const b of it.bullets.length ? it.bullets : ["(내용 입력)"]) lines.push(`    - ${b}`);
+    for (const b of it.bullets.length ? it.bullets : ["(내용 입력)"]) {
+      const depth = /^\t*/.exec(b)![0].length;
+      lines.push(`${"    ".repeat(depth + 1)}- ${b.slice(depth)}`);
+    }
     for (const l of it.links) lines.push(`    - ${l}`);
     return lines.join("\n");
   });
