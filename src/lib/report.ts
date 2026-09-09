@@ -14,7 +14,7 @@
 import { config } from "./config.js";
 import * as gh from "./github.js";
 import { addDays, todayKST } from "./dates.js";
-import { findDailyNote, dailyNotePath, extractMemos, parseFrontmatter, type VaultTask, fileToTask } from "./vault.js";
+import { findDailyNote, dailyNotePath, extractMemos, parseFrontmatter, isExcludedPath, type VaultTask, fileToTask } from "./vault.js";
 
 export const REPORT_START = "<!-- WORKHUB-REPORT:START -->";
 export const REPORT_END = "<!-- WORKHUB-REPORT:END -->";
@@ -26,7 +26,7 @@ export interface ReportItem {
   links: string[];
   done: boolean;
   /** 어디서 왔는지 — Slack 안내용 */
-  from: "할일" | "진행업무" | "메모" | "일일노트";
+  from: "할일" | "진행업무" | "메모" | "일일노트" | "프로젝트노트";
 }
 
 // ---------- 본문에서 꺼내기 ----------
@@ -214,11 +214,61 @@ export async function collectReport(date = todayKST()): Promise<ReportItem[]> {
     }
   }
 
-  // 4) 일일노트 메모 — 어느 항목에도 안 붙는 것들
+  // 4) 그날 날짜가 붙은 프로젝트 노트 (미팅노트 등) — 제목만
+  for (const it of await projectNotesOn(date)) {
+    if (items.some((x) => x.title === it.title)) continue;
+    items.push(it);
+  }
+
+  // 5) 일일노트 메모 — 어느 항목에도 안 붙는 것들
   const memos = daily ? extractMemos(daily.content).map((m) => m.replace(/^\d{1,2}:\d{2}\s*/, "")) : [];
   if (memos.length) items.push({ title: "기타", project: "", bullets: memos.slice(0, 8), links: [], done: false, from: "메모" });
 
   return items;
+}
+
+// ---------- 그날 날짜가 붙은 프로젝트 노트 ----------
+/**
+ * `01_Projects/` 아래에서 **파일 이름에 그날 날짜가 박힌** 노트를 찾습니다.
+ * 미팅노트처럼 진행업무·할일 어디에도 안 걸리는 기록을 놓치지 않기 위한 것입니다.
+ *
+ * 본문은 읽지 않고 **제목만** 항목으로 올립니다. 회의록은 수백 줄짜리도 있어
+ * 그대로 퍼오면 보고서가 못 쓰게 되기 때문입니다. 내용은 사람이 채웁니다.
+ */
+export function dateInFileName(base: string, date: string): boolean {
+  const [y, m, d] = date.split("-");
+  return [`${m}${d}_`, `${y}.${m}.${d}`, `${y}-${m}-${d}`, `${y}${m}${d}`].some((p) => base.startsWith(p));
+}
+
+/** 파일 이름에서 날짜 접두사와 확장자를 떼어 제목으로 */
+export function titleFromFileName(base: string): string {
+  return base
+    .replace(/\.md$/, "")
+    .replace(/^(?:\d{4}[.\-]\d{2}[.\-]\d{2}|\d{8}|\d{4})[_\-. ]*/, "")
+    .trim();
+}
+
+export async function projectNotesOn(date: string): Promise<ReportItem[]> {
+  const tree = await gh.listTree("01_Projects");
+  return tree
+    .filter((t) => {
+      if (t.type !== "blob" || !t.path.endsWith(".md")) return false;
+      if (t.path.includes("/01_진행업무/")) return false; // 1번 재료가 이미 본문까지 읽는다
+      if (isExcludedPath(t.path)) return false;
+      return dateInFileName(t.path.split("/").pop()!, date);
+    })
+    .map((t) => {
+      const parts = t.path.split("/");
+      return {
+        title: titleFromFileName(parts.pop()!),
+        project: parts[1] ? parts[1].replace(/^\d{2}_/, "") : "",
+        bullets: [],
+        links: [],
+        done: false,
+        from: "프로젝트노트" as const,
+      };
+    })
+    .filter((i) => i.title);
 }
 
 // ---------- 양식으로 엮기 ----------

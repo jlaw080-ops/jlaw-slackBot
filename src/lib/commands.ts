@@ -488,7 +488,7 @@ export async function executeCommand(p: Parsed, ctx: CommandContext): Promise<Co
       const items = await collectReport(p.date);
       const text = renderReport(items, p.date);
       const { path } = await writeReportBlock(text, p.date);
-      const counts = ["진행업무", "할일", "일일노트", "메모"].map((k) => `${k} ${items.filter((i) => i.from === k).length}`).join(" · ");
+      const counts = ["진행업무", "할일", "일일노트", "프로젝트노트", "메모"].map((k) => `${k} ${items.filter((i) => i.from === k).length}`).join(" · ");
       return {
         text: `📋 ${prettyKST(p.date)} 일일보고 초안 (${counts})`,
         blocks: [
