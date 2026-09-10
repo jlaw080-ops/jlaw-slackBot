@@ -168,7 +168,9 @@ export async function collectReport(date = todayKST()): Promise<ReportItem[]> {
   const items: ReportItem[] = [];
 
   // 1) 진행업무 노트 — 그날 `## 진행`에 적힌 내용이 곧 보고 내용
-  for (const f of await recentWorkNotes(date)) {
+  const workNotes = await recentWorkNotes(date);
+  const readPaths = new Set(workNotes.map((f) => f.path));
+  for (const f of workNotes) {
     const { fm, body } = parseFrontmatter(f.content);
     const lines = progressOn(body, date);
     const isToday = f.path.split("/").pop()!.slice(0, 4) === MMDD(date);
@@ -215,7 +217,7 @@ export async function collectReport(date = todayKST()): Promise<ReportItem[]> {
   }
 
   // 4) 그날 날짜가 붙은 프로젝트 노트 (미팅노트 등) — 제목만
-  for (const it of await projectNotesOn(date)) {
+  for (const it of await projectNotesOn(date, readPaths)) {
     if (items.some((x) => x.title === it.title)) continue;
     items.push(it);
   }
@@ -248,15 +250,25 @@ export function titleFromFileName(base: string): string {
     .trim();
 }
 
-export async function projectNotesOn(date: string): Promise<ReportItem[]> {
+/** 한 번에 올릴 수 있는 제목 수 — 하루에 문서를 여러 개 쪼개 써도 보고서가 넘치지 않게 */
+const PROJECT_NOTE_LIMIT = 12;
+
+/**
+ * `skip` 은 1번 재료(recentWorkNotes)가 이미 본문까지 읽은 파일들의 경로입니다.
+ * `01_진행업무` 폴더 전체를 빼면 그 안 하위 폴더(`…/dc_capacity/docs/`)에 남긴
+ * 그날 문서까지 사라지므로, 실제로 겹치는 파일만 뺍니다.
+ */
+export async function projectNotesOn(date: string, skip: Set<string> = new Set()): Promise<ReportItem[]> {
   const tree = await gh.listTree("01_Projects");
   return tree
     .filter((t) => {
       if (t.type !== "blob" || !t.path.endsWith(".md")) return false;
-      if (t.path.includes("/01_진행업무/")) return false; // 1번 재료가 이미 본문까지 읽는다
+      if (skip.has(t.path)) return false;
       if (isExcludedPath(t.path)) return false;
       return dateInFileName(t.path.split("/").pop()!, date);
     })
+    .sort((a, b) => a.path.localeCompare(b.path))
+    .slice(0, PROJECT_NOTE_LIMIT)
     .map((t) => {
       const parts = t.path.split("/");
       return {
