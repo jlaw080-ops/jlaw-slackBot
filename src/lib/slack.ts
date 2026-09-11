@@ -28,6 +28,19 @@ export async function postMessage(channel: string, text: string, blocks?: unknow
   return slackApi<{ ts: string; channel: string }>("chat.postMessage", { channel, text, blocks, thread_ts: threadTs, unfurl_links: false });
 }
 
+/**
+ * 채널에서 주워온 평문 메시지를 처리했다는 표시로 이모지를 답니다.
+ * 새 메시지를 또 올리면 시끄러우니, 조용한 확인으로 이모지 반응을 씁니다.
+ * 이미 달려 있으면 Slack이 `already_reacted` 오류를 주는데, 그건 무시합니다.
+ */
+export async function addReaction(channel: string, ts: string, name = "pencil2") {
+  try {
+    await slackApi("reactions.add", { channel, timestamp: ts, name });
+  } catch (e) {
+    if (!(e instanceof Error && e.message.includes("already_reacted"))) throw e;
+  }
+}
+
 /** 모달 열기 (슬래시 명령의 trigger_id는 3초 안에 써야 합니다) */
 export async function openView(triggerId: string, view: unknown) {
   return slackApi("views.open", { trigger_id: triggerId, view });

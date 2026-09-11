@@ -117,6 +117,28 @@ https://api.slack.com/apps → WorkHub
 
 ---
 
+## 4-1단계. #작업일지·#할일 채널에 그냥 쓴 글도 줍기 — 선택
+
+지금까지는 `/작업일지 …` 명령이나 메시지 `⋯` 메뉴로 보낸 것만 봇이 알아챘습니다.
+**채널에 명령어 없이 그냥 타이핑한 글**도 일일노트 메모로 남기고 싶다면 이 단계를 켜세요.
+안 켜도 다른 기능은 전부 그대로 동작합니다.
+
+1. **OAuth & Permissions → Scopes → Bot Token Scopes** 에 추가:
+   `channels:history` (공개 채널), 비공개 채널이면 `groups:history` 도, `reactions:write`
+2. **Event Subscriptions** → On → Request URL `배포주소/api/slack/events` → Save
+   (Slack이 그 자리에서 확인 요청을 보내고, 초록 체크가 뜨면 통과한 것입니다)
+3. 같은 화면 **Subscribe to bot events** → `message.channels` 추가 (비공개 채널이면 `message.groups` 도)
+4. **Install App → Reinstall to Workspace** — 스코프를 늘렸으니 다시 설치해야 적용됩니다
+5. #작업일지나 #할일 채널에 아무 글이나 써 보세요. 몇 초 뒤 메시지에 ✏️ 이모지가 붙으면
+   성공입니다 — 새 메시지를 또 올리지 않고 조용히 표시만 합니다.
+   `/작업일지 일일보고` 를 실행하면 그 글도 재료로 잡힙니다.
+
+무엇을 줍고 무엇을 버리는지:
+- 스레드 답글, 메시지 수정·삭제, 봇이 올린 메시지(우리 봇 포함)는 재료로 보지 않습니다.
+- 채널 최상위에 새로 쓴 평문 메시지만 그날 일일노트 `### 📝 메모` 에 `[작업일지 채널]` 또는 `[할일 채널]` 꼬리표를 달아 남깁니다.
+
+---
+
 ## 5단계. Notion 접점 — 선택
 
 ### 5-1. 통합 토큰
