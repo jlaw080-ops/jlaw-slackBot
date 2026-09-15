@@ -226,7 +226,7 @@ export async function collectReport(date = todayKST()): Promise<ReportItem[]> {
   const memos = daily ? extractMemos(daily.content).map((m) => m.replace(/^\d{1,2}:\d{2}\s*/, "")) : [];
   if (memos.length) items.push({ title: "기타", project: "", bullets: memos.slice(0, 8), links: [], done: false, from: "메모" });
 
-  return items;
+  return condense(items);
 }
 
 // ---------- 그날 날짜가 붙은 프로젝트 노트 ----------
@@ -310,6 +310,35 @@ export async function projectNotesOn(date: string, skip: Set<string> = new Set()
       };
     })
     .filter((i) => i.title);
+}
+
+// ---------- 짧게 줄이기 ----------
+/** 항목 하나에 남길 불릿 수 — Slack에서 한눈에 훑어보게 짧게 잡는다 */
+export const SHORT_BULLET_LIMIT = 3;
+/** 불릿 한 줄의 최대 글자 수 (들여쓰기 탭 제외) */
+export const SHORT_LINE_CHARS = 40;
+
+/** 한 줄을 짧게 자른다. 앞의 탭(하위 항목 깊이)은 그대로 두고 뒤만 자른다 */
+export function shorten(line: string, max = SHORT_LINE_CHARS): string {
+  const indent = /^\t*/.exec(line)![0];
+  const text = line.slice(indent.length);
+  if (text.length <= max) return line;
+  const cut = text.slice(0, max);
+  const lastSpace = cut.lastIndexOf(" ");
+  const head = lastSpace > max * 0.5 ? cut.slice(0, lastSpace) : cut;
+  return `${indent}${head.trimEnd()}…`;
+}
+
+/**
+ * 항목마다 불릿을 최대 {@link SHORT_BULLET_LIMIT}개로 줄이고, 각 줄도 짧게 자릅니다.
+ * 더 있었으면 몇 건 더 있는지만 표시합니다 — 내용은 원본 노트에 그대로 남아 있습니다.
+ */
+export function condense(items: ReportItem[]): ReportItem[] {
+  return items.map((it) => {
+    const kept = it.bullets.slice(0, SHORT_BULLET_LIMIT).map((b) => shorten(b));
+    const rest = it.bullets.length - kept.length;
+    return rest > 0 ? { ...it, bullets: [...kept, `… 외 ${rest}건 (원본 노트 참고)`] } : { ...it, bullets: kept };
+  });
 }
 
 // ---------- 양식으로 엮기 ----------
