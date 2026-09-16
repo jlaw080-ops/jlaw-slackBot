@@ -14,7 +14,7 @@
 import { config } from "./config.js";
 import * as gh from "./github.js";
 import { addDays, todayKST } from "./dates.js";
-import { findDailyNote, dailyNotePath, extractMemos, parseFrontmatter, isExcludedPath, type VaultTask, fileToTask } from "./vault.js";
+import { findDailyNote, dailyNotePath, extractMemos, parseFrontmatter, isExcludedPath, upsertProtectedBlock, type VaultTask, fileToTask } from "./vault.js";
 
 export const REPORT_START = "<!-- WORKHUB-REPORT:START -->";
 export const REPORT_END = "<!-- WORKHUB-REPORT:END -->";
@@ -357,27 +357,19 @@ export function renderReport(items: ReportItem[], date = todayKST(), author = co
   return [head, "", ...body, ""].join("\n");
 }
 
-/** 일일노트에 초안 블록을 넣습니다. 사람이 쓴 부분은 건드리지 않습니다 */
-export async function writeReportBlock(text: string, date = todayKST()): Promise<{ path: string; created: boolean }> {
+/**
+ * 일일노트에 초안 블록을 넣습니다. 사람이 쓴 부분(블록 밖)은 건드리지 않습니다.
+ * 초안 블록 **안쪽**을 직접 고쳐 최종본으로 다듬고 있었다면(=지난 번 봇 기록과
+ * 지금 내용이 다르면) 그마저도 덮어쓰지 않고 건너뜁니다 — 계속 다시 쓰다 보면
+ * PC가 아직 못 올린 그 수정과 부딪혀 git 충돌이 나기 때문입니다.
+ */
+export async function writeReportBlock(text: string, date = todayKST()): Promise<{ path: string; created: boolean; skipped: boolean }> {
   const existing = await findDailyNote(date);
-  const block = [
-    REPORT_START,
-    "## 📝 일일보고 초안 (자동 생성 — 다듬어서 위로 옮기세요)",
-    "",
-    text.trim(),
-    REPORT_END,
-  ].join("\n");
-
-  const cur = existing?.content ?? "";
-  const s = cur.indexOf(REPORT_START);
-  const e = cur.indexOf(REPORT_END);
-  const content = s >= 0 && e > s
-    ? `${cur.slice(0, s)}${block}${cur.slice(e + REPORT_END.length)}`
-    : cur
-      ? `${cur.replace(/\s+$/, "")}\n\n${block}\n`
-      : `${block}\n`;
+  const inner = ["## 📝 일일보고 초안 (자동 생성 — 다듬어서 위로 옮기세요)", "", text.trim()].join("\n");
+  const had = existing ? existing.content.includes(REPORT_START) : false;
+  const { content, skipped } = upsertProtectedBlock(existing?.content ?? null, REPORT_START, REPORT_END, inner);
 
   const path = existing?.path ?? dailyNotePath(date);
-  await gh.writeFile(path, content, `workhub: 일일보고 초안 ${date}`, existing?.sha);
-  return { path, created: !(s >= 0 && e > s) };
+  if (!skipped) await gh.writeFile(path, content, `workhub: 일일보고 초안 ${date}`, existing?.sha);
+  return { path, created: !had, skipped };
 }

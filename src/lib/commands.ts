@@ -487,14 +487,16 @@ export async function executeCommand(p: Parsed, ctx: CommandContext): Promise<Co
     case "worklog.report": {
       const items = await collectReport(p.date);
       const text = renderReport(items, p.date);
-      const { path } = await writeReportBlock(text, p.date);
+      const { path, skipped } = await writeReportBlock(text, p.date);
       const counts = ["진행업무", "할일", "일일노트", "프로젝트노트", "메모"].map((k) => `${k} ${items.filter((i) => i.from === k).length}`).join(" · ");
       return {
         text: `📋 ${prettyKST(p.date)} 일일보고 초안 (${counts})`,
         blocks: [
           section(`📋 *${prettyKST(p.date)} 일일보고 초안* — ${counts}`),
           section("```\n" + text.slice(0, 2800) + "\n```"),
-          context(`일일노트 \`${path}\` 아래 블록에도 넣었어요. 문장을 다듬어 위로 옮기시면 됩니다.`),
+          skipped
+            ? context(`⚠️ 일일노트 \`${path}\` 를 직접 수정하신 것 같아 초안은 다시 쓰지 않았어요. 위 결과는 Slack에만 남았습니다.`)
+            : context(`일일노트 \`${path}\` 아래 블록에도 넣었어요. 문장을 다듬어 위로 옮기시면 됩니다.`),
         ],
       };
     }
@@ -551,7 +553,8 @@ export async function executeCommand(p: Parsed, ctx: CommandContext): Promise<Co
 
     case "worklog.generate": {
       const r = await runWorklog();
-      return { text: `🌙 작업일지를 <#${config.slack.channelWorklog}>에 게시했어요. 완료 ${r.done}건, 진행 중 ${r.active}건, 메모 ${r.memos}건 · \`${r.path}\`` };
+      const noteNote = r.skipped ? " (일일노트는 직접 수정 중이신 것 같아 그대로 뒀어요)" : "";
+      return { text: `🌙 작업일지를 <#${config.slack.channelWorklog}>에 게시했어요. 완료 ${r.done}건, 진행 중 ${r.active}건, 메모 ${r.memos}건 · \`${r.path}\`${noteNote}` };
     }
 
     case "schedule.list": {
