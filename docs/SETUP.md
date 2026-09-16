@@ -308,6 +308,13 @@ Slack에서 아래 중 아무거나 치면 됩니다.
   가장 흔한 원인은 **Slack 앱이 여러 개**일 때 명령이 등록된 앱과 다른 앱의 Signing Secret을 넣은 경우입니다.
   `/api/health` 의 `SLACK_SIGNING_SECRET` 길이·앞 세 글자를 Slack 앱 화면의 값과 대조하세요.
 - 수동 실행 주소 (`?secret=CRON_SECRET` 필요): `배포주소/api/cron/daily-brief`, `배포주소/api/cron/worklog&date=…`, `배포주소/api/notion/pull`
+- **git 충돌(`conflict-files-obsidian-git`)이 자꾸 생긴다** → 대부분 봇과 PC가 그날 일일노트를
+  같이 건드려서입니다. 이제 봇은 작업일지·일일보고 블록을 쓸 때마다 지문(해시)을 남기고,
+  다음에 다시 쓰려 할 때 지금 내용이 그대로인지 먼저 확인합니다. **그 블록 안을 직접 고쳐
+  최종본으로 다듬고 있었다면, 봇이 그걸 감지하고 덮어쓰지 않습니다** (Slack 답장에
+  "⚠️ 직접 수정하신 것 같아 그대로 뒀어요"로 표시됩니다). 그래도 충돌이 남아 있다면
+  Obsidian Git의 자동 동기화 주기를 더 짧게(3~5분) 잡아 두세요 — PC 쪽 변경이 봇보다
+  먼저 GitHub에 올라갈 확률이 높아집니다.
 
 ---
 

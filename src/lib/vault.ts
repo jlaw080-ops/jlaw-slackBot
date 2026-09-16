@@ -22,6 +22,7 @@
  *
  *  봇은 frontmatter만 고치고 파일을 옮기지 않습니다. 완료는 status: done + completed 날짜.
  */
+import { createHash } from "node:crypto";
 import { config } from "./config.js";
 import * as gh from "./github.js";
 import { addDays, todayKST } from "./dates.js";
@@ -483,15 +484,63 @@ function upsertBlock(existing: string | null, block: string): string {
   return `${existing.replace(/\s+$/, "")}\n\n${block}\n`;
 }
 
+// ---------- 사람이 손댔으면 덮어쓰지 않기 ----------
+/**
+ * 봇이 마커 블록을 계속 자동으로 다시 쓰다 보면, 그 안을 직접 고쳐 최종본으로
+ * 다듬고 있는 사람과 부딪힙니다 (PC가 아직 못 올린 로컬 수정 + 봇이 GitHub에 먼저
+ * 올린 수정이 같은 줄을 건드려서 git 충돌). 그래서 블록을 쓸 때마다 그 내용의
+ * 지문(해시)을 맨 앞줄에 남겨 두고, 다음에 다시 쓰려 할 때 지금 지문이 그대로인지
+ * 확인합니다. 지문이 안 맞으면(=그 사이 사람이 손을 댔으면) 덮어쓰지 않고 건너뜁니다.
+ */
+function blockHash(s: string): string {
+  return createHash("sha1").update(s).digest("hex").slice(0, 10);
+}
+const HASH_LINE_RE = /^<!-- workhub:hash:([0-9a-f]{10}) -->\n/;
+
+/**
+ * 마커 블록을 안전하게 갈아 끼웁니다.
+ * `protectedSlice` 로 골라낸 부분(예: LOG 블록은 메모 앞부분만, REPORT 블록은 전체)이
+ * 마지막으로 봇이 적어 둔 지문과 다르면 사람이 손댄 것으로 보고 건너뜁니다.
+ * 아직 지문이 없는 옛 블록(이 기능이 생기기 전에 만들어진 것)은 이번 한 번은
+ * 그대로 써서 새 형식으로 넘어갑니다.
+ */
+export function upsertProtectedBlock(
+  existingFull: string | null,
+  start: string,
+  end: string,
+  newInner: string,
+  protectedSlice: (body: string) => string = (b) => b,
+): { content: string; skipped: boolean } {
+  const stamped = `<!-- workhub:hash:${blockHash(protectedSlice(newInner))} -->\n${newInner}`;
+  const block = `${start}\n${stamped}\n${end}`;
+
+  if (existingFull == null) return { content: `${block}\n`, skipped: false };
+  const s = existingFull.indexOf(start), e = existingFull.indexOf(end);
+  if (s < 0 || e < s) return { content: `${existingFull.replace(/\s+$/, "")}\n\n${block}\n`, skipped: false };
+
+  // 앞뒤로 붙는 줄바꿈(마커와의 구분용)을 떼어야 지문을 찍을 때 쓴 원래 내용과 비교가 맞는다
+  const currentInner = existingFull.slice(s + start.length, e).replace(/^\n/, "").replace(/\n$/, "");
+  const m = HASH_LINE_RE.exec(currentInner);
+  if (m) {
+    const currentBody = currentInner.slice(m[0].length);
+    if (blockHash(protectedSlice(currentBody)) !== m[1]) return { content: existingFull, skipped: true };
+  }
+  return { content: `${existingFull.slice(0, s)}${block}${existingFull.slice(e + end.length)}`, skipped: false };
+}
+
 /** 일일노트의 마커 블록만 다시 씁니다. 블록 밖 내용은 절대 건드리지 않습니다 */
-export async function writeWorklogBlock(w: Omit<WorklogView, "memos">): Promise<{ path: string; memos: string[] }> {
+export async function writeWorklogBlock(w: Omit<WorklogView, "memos">): Promise<{ path: string; memos: string[]; skipped: boolean }> {
   const existing = await findDailyNote(w.date);
   const memos = existing ? extractMemos(existing.content) : [];
   const stamp = new Intl.DateTimeFormat("ko-KR", { timeZone: config.timezone, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
-  const content = upsertBlock(existing?.content ?? null, renderBlock({ ...w, memos }, stamp));
+  const inner = renderBlock({ ...w, memos }, stamp).slice(START.length + 1, -(END.length + 1));
+  // 메모 섹션은 appendMemo가 수시로 따로 갱신하는 영역이라, 지문 비교에서는 뺀다 —
+  // 안 그러면 메모가 새로 쌓일 때마다 "사람이 손댔다"로 오판해 이 함수가 멈춰 버린다.
+  const headOnly = (body: string) => body.split(MEMO_HEADER)[0];
+  const { content, skipped } = upsertProtectedBlock(existing?.content ?? null, START, END, inner, headOnly);
   const path = existing?.path ?? dailyNotePath(w.date);
-  await gh.writeFile(path, content, `workhub: 작업일지 ${w.date}`, existing?.sha);
-  return { path, memos };
+  if (!skipped) await gh.writeFile(path, content, `workhub: 작업일지 ${w.date}`, existing?.sha);
+  return { path, memos, skipped };
 }
 
 /** 메모 한 줄 추가 (블록이 없으면 최소 블록 생성) */

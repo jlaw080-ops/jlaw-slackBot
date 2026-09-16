@@ -17,6 +17,8 @@ export interface WorklogResult {
   memos: string[];
   events: Array<{ when: string; summary: string }>;
   ticketChanges: Array<{ title: string; from: string | null; to: string }>;
+  /** 일일노트를 직접 수정 중이라 블록 갱신을 건너뛰었으면 true */
+  skipped: boolean;
 }
 
 export async function buildWorklog(date = todayKST()): Promise<WorklogResult> {
@@ -27,8 +29,8 @@ export async function buildWorklog(date = todayKST()): Promise<WorklogResult> {
   const rawEvents = config.google.enabled ? await listEvents(dayRangeKST(date).timeMin, dayRangeKST(date).timeMax).catch(() => []) : [];
   const events = rawEvents.filter((e) => !e.vaultPath).map((e) => ({ when: e.allDay ? "종일" : `${timeKST(e.start)}–${timeKST(e.end)}`, summary: e.summary }));
   const ticketChanges = refreshed.changed.map((c) => ({ title: c.task.title, from: c.from, to: c.to }));
-  const { path, memos } = await writeWorklogBlock({ date, done, active, events, ticketChanges });
-  return { date, path, done, active, memos, events, ticketChanges };
+  const { path, memos, skipped } = await writeWorklogBlock({ date, done, active, events, ticketChanges });
+  return { date, path, done, active, memos, events, ticketChanges, skipped };
 }
 
 export function buildWorklogBlocks(w: WorklogResult) {
@@ -40,7 +42,11 @@ export function buildWorklogBlocks(w: WorklogResult) {
   if (w.memos.length) blocks.push(section(`*📝 메모*\n${w.memos.map((m) => `• ${m}`).join("\n")}`));
   blocks.push(divider);
   const uri = obsidianUri(w.path);
-  blocks.push(context(`${uri ? `<${uri}|일일노트 열기>` : `일일노트 \`${w.path}\``} · 메모 추가: \`/작업일지 내용\``));
+  if (w.skipped) {
+    blocks.push(context(`⚠️ 일일노트 \`${w.path}\` 를 직접 수정하신 것 같아 블록은 그대로 뒀어요. 위 내용은 Slack에만 남겼습니다.`));
+  } else {
+    blocks.push(context(`${uri ? `<${uri}|일일노트 열기>` : `일일노트 \`${w.path}\``} · 메모 추가: \`/작업일지 내용\``));
+  }
   return { text: `${prettyKST(w.date)} 작업일지: 완료 ${w.done.length}건, 진행 중 ${w.active.length}건, 메모 ${w.memos.length}건`, blocks };
 }
 
@@ -48,5 +54,5 @@ export async function runWorklog(date = todayKST()) {
   const w = await buildWorklog(date);
   const { text, blocks } = buildWorklogBlocks(w);
   const posted = await postMessage(config.slack.channelWorklog, text, blocks);
-  return { ts: posted.ts, path: w.path, done: w.done.length, active: w.active.length, memos: w.memos.length };
+  return { ts: posted.ts, path: w.path, done: w.done.length, active: w.active.length, memos: w.memos.length, skipped: w.skipped };
 }
